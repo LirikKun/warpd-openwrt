@@ -24,20 +24,71 @@ const (
 )
 
 type MihomoMan struct {
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	pid      int
-	running  bool
-	lastConf string
-	started  time.Time
+	mu          sync.Mutex
+	cmd         *exec.Cmd
+	done        chan struct{}
+	pid         int
+	running     bool
+	lastConf    string
+	desiredConf string      // latest Ensure intent, including credentials; never exposed
+	lastAccount warpAccount // value copy, advanced only with lastConf
+	started     time.Time
+	generation  uint64
+
+	// Optional per-instance dependencies; the zero value uses production paths.
+	// Configure these before concurrent use.
+	configPath string
+	command    func(string) *exec.Cmd
+	reload     func() error
+}
+
+// MihomoStatus is one consistent view of the child and its applied config.
+// Generation advances only on a successful start or changed-config reload;
+// it survives exits/stops, so checks from a previous apply can be discarded.
+type MihomoStatus struct {
+	PID        int
+	Running    bool
+	Generation uint64
+}
+
+func (m *MihomoMan) Snapshot() MihomoStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refreshExitedLocked()
+	return MihomoStatus{PID: m.pid, Running: m.running, Generation: m.generation}
+}
+
+// AppliedSnapshot compares the effective desired configuration to the last
+// successful apply, under the same lock as its process/generation. Credentials
+// are those bound to that apply; neither they nor the rendered YAML escape.
+func (m *MihomoMan) AppliedSnapshot(g Settings, e endpoints) (MihomoStatus, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refreshExitedLocked()
+	status := MihomoStatus{PID: m.pid, Running: m.running, Generation: m.generation}
+	return status, m.running && m.lastConf != "" && m.desiredConf == m.lastConf && mihomoConfText(g, e, m.lastAccount) == m.lastConf
+}
+
+// Reconcile the short interval between reaping and the waiter's mutex lock.
+func (m *MihomoMan) refreshExitedLocked() {
+	select {
+	case <-m.done:
+		m.cmd = nil
+		m.done = nil
+		m.pid = 0
+		m.running = false
+		m.started = time.Time{}
+	default:
+	}
 }
 
 var mihomo = &MihomoMan{}
 
 // mihomoConfText renders the full proxy set from live settings + endpoints.
 // Port map (fixed, documented in web UI):
-//   4001 warp, 4003 masque, 4004 masqueh2,
-//   4005 masque->warp (m2w)
+//
+//	4001 warp, 4003 masque, 4004 masqueh2,
+//	4005 masque->warp (m2w)
 func mihomoConfText(g Settings, e endpoints, acc warpAccount) string {
 	var b strings.Builder
 	b.WriteString("port: 0\nsocks-port: 0\nmixed-port: 0\n")
@@ -101,32 +152,34 @@ func mihomoConfText(g Settings, e endpoints, acc warpAccount) string {
 			masq("MASQUEH2", ep, "h2")
 		}
 	}
+	m2wReady := false
 	if p := g.Proxies["m2w"]; p.Enabled {
 		mep := firstNonEmpty(p.Outer, e.masque["masque"], e.warp)
 		wep := firstNonEmpty(p.Inner, e.warp)
 		if mep != "" && wep != "" && mep != wep {
 			masq("M2W OUTER", mep, "")
 			awg("M2W INNER", wep, "    mtu: 1250\n    dialer-proxy: \"M2W OUTER\"\n")
+			m2wReady = true
 		}
 	}
 
 	b.WriteString("listeners:\n")
-	listener := func(port int, name string) {
+	listener := func(p *ProxySettings, name string) {
 		if name != "" {
-			fmt.Fprintf(&b, "  - name: l%d\n    type: socks\n    port: %d\n    proxy: %q\n", port, port, name)
+			fmt.Fprintf(&b, "  - name: l%d\n    type: socks\n    listen: %q\n    port: %d\n    proxy: %q\n", p.Port, p.Listen, p.Port, name)
 		}
 	}
 	if p := g.Proxies["warp"]; p.Enabled && (p.Endpoint != "" || e.warp != "") {
-		listener(p.Port, "WARP")
+		listener(p, "WARP")
 	}
 	if p := g.Proxies["masque"]; p.Enabled && (p.Endpoint != "" || e.masque["masque"] != "") {
-		listener(p.Port, "MASQUE")
+		listener(p, "MASQUE")
 	}
 	if p := g.Proxies["masqueh2"]; p.Enabled && (p.Endpoint != "" || e.masque["masqueh2"] != "") {
-		listener(p.Port, "MASQUEH2")
+		listener(p, "MASQUEH2")
 	}
-	if p := g.Proxies["m2w"]; p.Enabled {
-		listener(p.Port, "M2W INNER")
+	if p := g.Proxies["m2w"]; m2wReady {
+		listener(p, "M2W INNER")
 	}
 	return b.String()
 }
@@ -135,17 +188,26 @@ func mihomoConfText(g Settings, e endpoints, acc warpAccount) string {
 func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.refreshExitedLocked()
 	conf := mihomoConfText(g, e, acc)
+	m.desiredConf = conf
 	if m.running && conf == m.lastConf {
 		return nil
 	}
-	if err := os.WriteFile(mihomoConf, []byte(conf), 0600); err != nil {
+	configPath := firstNonEmpty(m.configPath, mihomoConf)
+	if err := os.WriteFile(configPath, []byte(conf), 0600); err != nil {
 		return err
 	}
-	m.lastConf = conf
 	if m.running {
 		// try hot reload via external-controller
-		if err := mihomoReload(); err == nil {
+		reload := m.reload
+		if reload == nil {
+			reload = mihomoReload
+		}
+		if err := reload(); err == nil {
+			m.lastConf = conf
+			m.lastAccount = acc
+			m.generation++
 			logg.Printf("mihomo reloaded (pid %d)", m.pid)
 			return nil
 		} else {
@@ -153,8 +215,16 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 		}
 		m.stopLocked()
 	}
-	cmd := exec.Command(mihomoBin, "-d", mihomoDir, "-f", mihomoConf)
-	cmd.Env = append(os.Environ(), "GOMEMLIMIT=40MiB")
+	var cmd *exec.Cmd
+	if m.command != nil {
+		cmd = m.command(configPath)
+	} else {
+		cmd = exec.Command(mihomoBin, "-d", mihomoDir, "-f", configPath)
+	}
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, "GOMEMLIMIT=40MiB")
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -162,7 +232,27 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 	m.pid = cmd.Process.Pid
 	m.running = true
 	m.started = time.Now()
-	go func() { _ = cmd.Wait() }()
+	m.lastConf = conf
+	m.lastAccount = acc
+	m.generation++
+	done := make(chan struct{})
+	m.done = done
+	go func() {
+		_ = cmd.Wait()
+		// Stop holds mu while waiting. Publish reaping before taking mu so
+		// it can finish and a late waiter cannot erase a replacement child.
+		close(done)
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		// A previous child may finish after a replacement was installed.
+		if m.cmd == cmd {
+			m.cmd = nil
+			m.done = nil
+			m.pid = 0
+			m.running = false
+			m.started = time.Time{}
+		}
+	}()
 	logg.Printf("mihomo started (pid %d)", m.pid)
 	return nil
 }
@@ -170,11 +260,27 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 func (m *MihomoMan) stopLocked() {
 	if m.cmd != nil && m.cmd.Process != nil {
 		_ = m.cmd.Process.Signal(syscall.SIGTERM)
-		time.Sleep(1500 * time.Millisecond)
-		_ = m.cmd.Process.Kill()
+		timer := time.NewTimer(1500 * time.Millisecond)
+		select {
+		case <-m.done:
+			timer.Stop()
+		case <-timer.C:
+			_ = m.cmd.Process.Kill()
+			// Even reaping has a bound; status and subsequent Ensure must
+			// not get stuck behind a child which cannot finish exiting.
+			timer.Reset(1500 * time.Millisecond)
+			select {
+			case <-m.done:
+				timer.Stop()
+			case <-timer.C:
+			}
+		}
 	}
+	m.cmd = nil
+	m.done = nil
 	m.running = false
 	m.pid = 0
+	m.started = time.Time{}
 }
 
 func (m *MihomoMan) Stop() {
@@ -184,9 +290,7 @@ func (m *MihomoMan) Stop() {
 }
 
 func (m *MihomoMan) Running() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.running
+	return m.Snapshot().Running
 }
 
 func host(ep string) string {

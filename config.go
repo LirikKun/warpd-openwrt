@@ -40,7 +40,8 @@ import (
 //	    option protocol 'awg'
 //	    option outer_by 'ping'         # ping|speed
 type Settings struct {
-	mu sync.RWMutex
+	// Only live settings own a lock; value snapshots do not copy a mutex.
+	mu *sync.RWMutex
 
 	Enabled        bool
 	CheckPeriod    int
@@ -56,7 +57,7 @@ type Settings struct {
 	SnapMinSpacing int // minutes between ROM snapshots
 
 	// Scan exclusion filters (UCI: warpd.scan.*).
-	ExcludeNodes    string // comma-separated IATA codes, e.g. "DME,SVO"
+	ExcludeNodes     string // comma-separated IATA codes, e.g. "DME,SVO"
 	ExcludeCountries string // comma-separated ISO codes, e.g. "RU"
 
 	MaxPing int // max endpoint ping (ms, 0 = unlimited) for endpoint selection
@@ -98,26 +99,38 @@ func (p *ProxySettings) defaults(key string) *ProxySettings {
 	return p
 }
 
+// Zero-value/test settings use a shared fallback without lazy initialization
+// races. LoadSettings gives the live configuration its own mutex.
+var fallbackSettingsMu sync.RWMutex
+
+func (s *Settings) mutex() *sync.RWMutex {
+	if s.mu != nil {
+		return s.mu
+	}
+	return &fallbackSettingsMu
+}
+
 func (s *Settings) Snapshot() Settings {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	mu := s.mutex()
+	mu.RLock()
+	defer mu.RUnlock()
 	out := Settings{
-		Enabled:        s.Enabled,
-		CheckPeriod:    s.CheckPeriod,
-		ScanSample:     s.ScanSample,
-		MaxPing:        s.MaxPing,
-		ScanJobs:       s.ScanJobs,
-		WebListen:      s.WebListen,
-		WebPort:        s.WebPort,
-		WebSecret:      s.WebSecret,
-		AutoscanStart:  s.AutoscanStart,
-		FailRestart:    s.FailRestart,
-		FailRescan:     s.FailRescan,
-		DMERescanGap:   s.DMERescanGap,
-		SnapMinSpacing: s.SnapMinSpacing,
+		Enabled:          s.Enabled,
+		CheckPeriod:      s.CheckPeriod,
+		ScanSample:       s.ScanSample,
+		MaxPing:          s.MaxPing,
+		ScanJobs:         s.ScanJobs,
+		WebListen:        s.WebListen,
+		WebPort:          s.WebPort,
+		WebSecret:        s.WebSecret,
+		AutoscanStart:    s.AutoscanStart,
+		FailRestart:      s.FailRestart,
+		FailRescan:       s.FailRescan,
+		DMERescanGap:     s.DMERescanGap,
+		SnapMinSpacing:   s.SnapMinSpacing,
 		ExcludeNodes:     s.ExcludeNodes,
 		ExcludeCountries: s.ExcludeCountries,
-		Proxies:        map[string]*ProxySettings{},
+		Proxies:          map[string]*ProxySettings{},
 	}
 	for k, v := range s.Proxies {
 		cp := *v
@@ -167,19 +180,20 @@ func uciInt(key string, def, min, max int) int {
 
 func LoadSettings() *Settings {
 	s := &Settings{
-		Enabled:        uciBool("warpd.global.enabled", true),
-		CheckPeriod:    uciInt("warpd.global.check_period", 300, 10, 86400),
-		ScanSample:     uciInt("warpd.global.scan_sample", 2, 1, 50),
-		MaxPing:        uciInt("warpd.global.max_ping", 0, 0, 5000),
-		ScanJobs:       uciInt("warpd.global.scan_jobs", 6, 1, 32),
-		WebListen:      defstr(uciGet("warpd.global.web_listen"), "0.0.0.0"),
-		WebPort:        uciInt("warpd.global.web_port", 9095, 1024, 65535),
-		WebSecret:      uciGet("warpd.global.web_secret"),
-		AutoscanStart:  uciBool("warpd.global.autoscan_on_start", true),
-		FailRestart:    uciInt("warpd.global.fail_restart", 3, 1, 100),
-		FailRescan:     uciInt("warpd.global.fail_rescan", 5, 2, 100),
-		DMERescanGap:   uciInt("warpd.global.dme_rescan_gap", 600, 60, 86400),
-		SnapMinSpacing: uciInt("warpd.global.snap_spacing_min", 60, 5, 10080),
+		mu:               &sync.RWMutex{},
+		Enabled:          uciBool("warpd.global.enabled", true),
+		CheckPeriod:      uciInt("warpd.global.check_period", 300, 10, 86400),
+		ScanSample:       uciInt("warpd.global.scan_sample", 2, 1, 50),
+		MaxPing:          uciInt("warpd.global.max_ping", 0, 0, 5000),
+		ScanJobs:         uciInt("warpd.global.scan_jobs", 6, 1, 32),
+		WebListen:        defstr(uciGet("warpd.global.web_listen"), "0.0.0.0"),
+		WebPort:          uciInt("warpd.global.web_port", 9095, 1024, 65535),
+		WebSecret:        uciGet("warpd.global.web_secret"),
+		AutoscanStart:    uciBool("warpd.global.autoscan_on_start", true),
+		FailRestart:      uciInt("warpd.global.fail_restart", 3, 1, 100),
+		FailRescan:       uciInt("warpd.global.fail_rescan", 5, 2, 100),
+		DMERescanGap:     uciInt("warpd.global.dme_rescan_gap", 600, 60, 86400),
+		SnapMinSpacing:   uciInt("warpd.global.snap_spacing_min", 60, 5, 10080),
 		ExcludeNodes:     uciGet("warpd.global.exclude_nodes"),
 		ExcludeCountries: uciGet("warpd.global.exclude_countries"),
 	}
@@ -311,7 +325,8 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 	}
 	// reload live values
 	fresh := LoadSettings()
-	s.mu.Lock()
+	mu := s.mutex()
+	mu.Lock()
 	s.CheckPeriod = fresh.CheckPeriod
 	s.MaxPing = fresh.MaxPing
 	s.ScanSample = fresh.ScanSample
@@ -331,7 +346,7 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 			p.Listen = f.Listen
 		}
 	}
-	s.mu.Unlock()
+	mu.Unlock()
 	return applied, nil
 }
 

@@ -52,10 +52,9 @@ func (c *ProxyCheck) set(f func(*ProxyState)) {
 
 // runChecks is the health loop for all enabled proxies.
 func runChecks(ctx context.Context, cfg *Settings, orch *Orchestrator) {
-	// ensure mihomo is up before probing
-	for i := 0; i < 60 && !mihomoAlive(); i++ {
-		time.Sleep(2 * time.Second)
-	}
+	var lastRestart time.Time
+	// Supervision must run even before the controller exists: it is Ensure
+	// below that starts the child. Do not delay cancellation for startup.
 	for {
 		select {
 		case <-ctx.Done():
@@ -70,41 +69,114 @@ func runChecks(ctx context.Context, cfg *Settings, orch *Orchestrator) {
 				logg.Printf("mihomo: %v", err)
 			}
 		}
+		roundStarted := time.Now()
+		process := mihomo.Snapshot()
+		var served []string
+		var probes sync.WaitGroup
 		for _, name := range proxyNames {
 			p := g.Proxies[name]
-			if !p.Enabled {
+			if p == nil || !p.Enabled {
 				continue
 			}
-			// a proxy only serves once its endpoint exists
+			// A proxy only serves once all of its endpoints exist.
 			ep, outer := liveEndpoint(name, p, e)
-			if ep == "" || (name == "m2w" && outer == "") {
+			if ep == "" || (name == "m2w" && (outer == "" || outer == ep)) {
+				if g.AutoscanStart {
+					orch.requestScan(name, "missing endpoint")
+				}
 				continue
 			}
-			checkProxy(g, name, orch)
+			served = append(served, name)
+			probes.Add(1)
+			go func(name string) {
+				defer probes.Done()
+				checkProxy(ctx, g, name, orch)
+			}(name)
+		}
+		probes.Wait()
+		if ctx.Err() != nil {
+			return
+		}
+		if current := mihomo.Snapshot(); current.Running && current.Generation == process.Generation &&
+			healthRoundRestartDue(g, served, process.Generation, roundStarted, lastRestart, time.Now()) {
+			// One failed chain must never restart its healthy neighbours.
+			// Only a complete, current failed round permits bounded recovery.
+			if acc, err := loadAccount(account); err == nil {
+				lastRestart = time.Now()
+				logg.Printf("all served proxies failed -> restarting shared mihomo")
+				mihomo.Stop()
+				if err := mihomo.Ensure(cfg.Snapshot(), stateGetEndpoints(), acc); err != nil {
+					logg.Printf("mihomo recovery: %v", err)
+				}
+				for _, name := range served {
+					getCheck(name).set(func(st *ProxyState) { st.Restarts++ })
+				}
+			}
 		}
 		sleepCtx2(ctx, time.Duration(g.CheckPeriod)*time.Second)
 	}
 }
 
-func checkProxy(g Settings, name string, orch *Orchestrator) {
+func healthRoundRestartDue(g Settings, served []string, generation uint64, started, lastRestart, now time.Time) bool {
+	if len(served) == 0 || g.FailRestart <= 0 || !lastRestart.IsZero() && now.Sub(lastRestart) < time.Duration(max(60, g.DMERescanGap))*time.Second {
+		return false
+	}
+	for _, name := range served {
+		st := getCheck(name).snapshot()
+		checked, err := time.Parse(time.RFC3339, st.LastCheck)
+		if err != nil || checked.Before(started) || st.Checking || st.CheckedGeneration != generation || st.FailStreak < g.FailRestart {
+			return false
+		}
+	}
+	return true
+}
+
+func checkProxy(ctx context.Context, g Settings, name string, orch *Orchestrator) {
+	checkProxyWith(ctx, g, name, orch, socksMetaCheck)
+}
+
+func checkProxyWith(ctx context.Context, g Settings, name string, orch *Orchestrator, probe func(context.Context, string, int) (exitParse, error)) {
 	p := g.Proxies[name]
+	e := stateGetEndpoints()
+	process, applied := mihomo.AppliedSnapshot(g, e)
+	if !applied || p == nil || !p.Enabled {
+		return
+	}
+	ep, outer := liveEndpoint(name, p, e)
 	c := getCheck(name)
-	attempts := 3
-	if name == "warp" || name == "masqueh2" {
-		attempts = 2
+	c.set(func(st *ProxyState) { st.Checking = true })
+	defer c.set(func(st *ProxyState) { st.Checking = false })
+	// socksMetaCheck owns all retries within one 35-second total budget.
+	// A second retry loop here used to multiply that budget into minutes.
+	res, err := probe(ctx, p.Listen, p.Port)
+	if ctx.Err() != nil {
+		return // shutdown is not a failed health check
 	}
-	var res exitParse
-	var err error
-	for a := 0; a < attempts; a++ {
-		res, err = socksMetaCheck(context.Background(), "127.0.0.1", p.Port)
-		if err == nil {
-			break
-		}
-		if a < attempts-1 {
-			time.Sleep(8 * time.Second)
-		}
+	current := orch.settings.Snapshot()
+	currentEndpoints := stateGetEndpoints()
+	after, applied := mihomo.AppliedSnapshot(current, currentEndpoints)
+	fresh := current.Proxies[name]
+	if !applied || fresh == nil {
+		return
 	}
-	now := time.Now().Format(time.RFC3339)
+	currentEP, currentOuter := liveEndpoint(name, fresh, currentEndpoints)
+	if after.Generation != process.Generation || after.Running != process.Running ||
+		!fresh.Enabled || fresh.Port != p.Port || fresh.Listen != p.Listen ||
+		currentEP != ep || currentOuter != outer {
+		return // a result from an obsolete applied configuration is not current health
+	}
+	recordProxyResult(g, name, orch, res, err, time.Now())
+	c.set(func(st *ProxyState) {
+		st.CheckedGeneration = process.Generation
+		st.CheckedEndpoint, st.CheckedOuter = ep, outer
+		st.CheckedPort, st.CheckedListen = p.Port, p.Listen
+	})
+}
+
+// recordProxyResult is the state/automation boundary after one bounded probe.
+func recordProxyResult(g Settings, name string, orch *Orchestrator, res exitParse, err error, checked time.Time) {
+	c := getCheck(name)
+	now := checked.Format(time.RFC3339Nano)
 	if err != nil {
 		c.set(func(st *ProxyState) {
 			st.Checks++
@@ -114,16 +186,9 @@ func checkProxy(g Settings, name string, orch *Orchestrator) {
 		})
 		fails := c.snapshot().FailStreak
 		logg.Printf("[%s] health check failed (%d in a row): %v", name, fails, err)
-		if fails >= g.FailRescan {
-			orch.requestScan(name, fmt.Sprintf("%d failed checks", fails))
-			time.Sleep(15 * time.Second)
-		} else if fails >= g.FailRestart && fails%g.FailRestart == 0 {
-			// restart the whole mihomo (single process serves all)
-			logg.Printf("[%s] %d failed checks -> restarting mihomo", name, fails)
-			mihomo.Stop()
-			acc, err := loadAccount(account)
-			if err == nil {
-				_ = mihomo.Ensure(g, stateGetEndpoints(), acc)
+		if g.FailRescan > 0 && fails >= g.FailRescan {
+			if orch.requestScan(name, fmt.Sprintf("%d failed checks", fails)) {
+				c.set(func(st *ProxyState) { st.Rescans++ })
 			}
 		}
 		return
@@ -142,14 +207,18 @@ func checkProxy(g Settings, name string, orch *Orchestrator) {
 		logg.Printf("[%s] exit: %s (node %s)", name, res.info, res.node)
 		setLastNode(name, res.node)
 	}
-	if badNode(g, res.node) {
-		logg.Printf("[%s] exit landed on %s node -> rescanning", name, res.node)
-		orch.requestScan(name, res.node+" exit")
+	// /meta reports the HTTP serving colo, not a controllable MASQUE peer.
+	// The WARP scanner can honor exit filters; MASQUE/chain scans cannot.
+	if name == "warp" && badNode(g, res.node) {
+		if orch.requestScan(name, res.node+" exit") {
+			c.set(func(st *ProxyState) { st.Rescans++ })
+			logg.Printf("[%s] excluded HTTP colo %s -> scan queued", name, res.node)
+		}
 	}
 }
 
 var (
-	nodesMu sync.Mutex
+	nodesMu   sync.Mutex
 	lastNodes = map[string]string{}
 )
 

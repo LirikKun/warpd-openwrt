@@ -25,16 +25,11 @@ func main() {
 
 	orch := NewOrchestrator(cfg)
 
-	// when a scan lands new endpoints, re-render the mihomo config and
-	// reload mihomo (unless the proxy is manually pinned in UCI)
+	// The renderer honors every manual pin. Re-render even when the scanned
+	// standalone proxy is pinned: an unpinned M2W dependency may still change.
+	// Ensure avoids a reload when the effective configuration is identical.
 	orch.onApply = func(name string) {
 		g := cfg.Snapshot()
-		if name != "both" {
-			if p, ok := g.Proxies[name]; ok && pinned(p, stateGetEndpoints(), name) {
-				logg.Printf("[%s] manual endpoint pinned, not switching", name)
-				return
-			}
-		}
 		acc, err := loadAccount(account)
 		if err != nil {
 			logg.Printf("[%s] account: %v", name, err)
@@ -91,7 +86,7 @@ func main() {
 	}
 }
 
-const version = "2.0.0-mihomo"
+const version = "2.0.1-stability"
 
 // pinned reports whether the proxy has a manual UCI pin that overrides scans.
 func pinned(p *ProxySettings, e endpoints, name string) bool {

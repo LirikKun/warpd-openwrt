@@ -13,15 +13,16 @@ import (
 
 // Server is the minimal JSON API + static UI of warpd.
 // Endpoints (all under /api):
-//   GET  /api/status         -> { proxies: {...}, scan: {...}, config: {...} }
-//   POST /api/scan           { for: "warp"|"masque"|"both", reason? }
-//   POST /api/endpoint       { proxy: "warp", endpoint: "ip:port" }
-//                              { proxy: "m2w", outer, inner }
-//   POST /api/endpoint/clear { proxy: "warp" }   -> back to auto
-//   POST /api/restart        { proxy }
-//   POST /api/register       { fresh: bool }
-//   POST /api/config         { key: value, ... }   -> persisted to UCI
-//   GET  /api/log            -> { lines: [...] }
+//
+//	GET  /api/status         -> { proxies: {...}, scan: {...}, config: {...} }
+//	POST /api/scan           { for: "warp"|"masque"|"both", reason? }
+//	POST /api/endpoint       { proxy: "warp", endpoint: "ip:port" }
+//	                           { proxy: "m2w", outer, inner }
+//	POST /api/endpoint/clear { proxy: "warp" }   -> back to auto
+//	POST /api/restart        { proxy }
+//	POST /api/register       { fresh: bool }
+//	POST /api/config         { key: value, ... }   -> persisted to UCI
+//	GET  /api/log            -> { lines: [...] }
 //
 // auth: if warpd.global.web_secret is set, require "Authorization: Bearer <secret>".
 type Server struct {
@@ -47,13 +48,14 @@ func (srv *Server) authorized(r *http.Request) bool {
 // live settings, so /api/status reflects a pin set through /api/endpoint.
 func (srv *Server) refreshProxyPin(name string) {
 	fresh := LoadSettings().Proxies[name]
-	srv.cfg.mu.Lock()
+	mu := srv.cfg.mutex()
+	mu.Lock()
 	if p, ok := srv.cfg.Proxies[name]; ok {
 		p.Endpoint = fresh.Endpoint
 		p.Outer = fresh.Outer
 		p.Inner = fresh.Inner
 	}
-	srv.cfg.mu.Unlock()
+	mu.Unlock()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -65,6 +67,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func (srv *Server) status() map[string]any {
 	g := srv.cfg.Snapshot()
 	e := stateGetEndpoints()
+	process, applied := mihomo.AppliedSnapshot(g, e)
 	proxies := map[string]ProxyState{}
 	for _, name := range proxyNames {
 		p := g.Proxies[name]
@@ -73,10 +76,16 @@ func (srv *Server) status() map[string]any {
 		st.Enabled = p.Enabled
 		st.Listen = p.Listen
 		st.Port = p.Port
-		st.Pid = mihomo.pid
-		st.Running = mihomo.Running()
-		st.Ready = mihomo.Running() && p.Enabled && st.FailStreak == 0 && st.Checks > 0
+		st.Pid, st.Running = process.PID, process.Running
 		st.Endpoint, st.Outer = liveEndpoint(name, p, e)
+		checked, checkErr := time.Parse(time.RFC3339, st.LastCheck)
+		age := time.Since(checked)
+		fresh := checkErr == nil && age >= 0 && age <= time.Duration(g.CheckPeriod)*time.Second+40*time.Second
+		st.Ready = applied && st.Running && p.Enabled && st.Endpoint != "" &&
+			(name != "m2w" || st.Outer != "" && st.Outer != st.Endpoint) &&
+			st.FailStreak == 0 && st.Error == "" && st.OKChecks > 0 && fresh && !st.Checking &&
+			st.CheckedGeneration == process.Generation && st.CheckedEndpoint == st.Endpoint &&
+			st.CheckedOuter == st.Outer && st.CheckedPort == p.Port && st.CheckedListen == p.Listen
 		if name == "m2w" {
 			st.ManualEP = p.Outer != "" || p.Inner != ""
 		} else {
@@ -85,17 +94,17 @@ func (srv *Server) status() map[string]any {
 		proxies[name] = st
 	}
 	cfg := map[string]any{
-		"check_period":    g.CheckPeriod,
-		"scan_sample":     g.ScanSample,
-		"scan_jobs":       g.ScanJobs,
-		"autoscan_start":  g.AutoscanStart,
-		"fail_restart":    g.FailRestart,
-		"fail_rescan":     g.FailRescan,
-		"dme_rescan_gap":  g.DMERescanGap,
-		"max_ping":        g.MaxPing,
+		"check_period":      g.CheckPeriod,
+		"scan_sample":       g.ScanSample,
+		"scan_jobs":         g.ScanJobs,
+		"autoscan_start":    g.AutoscanStart,
+		"fail_restart":      g.FailRestart,
+		"fail_rescan":       g.FailRescan,
+		"dme_rescan_gap":    g.DMERescanGap,
+		"max_ping":          g.MaxPing,
 		"exclude_nodes":     g.ExcludeNodes,
 		"exclude_countries": g.ExcludeCountries,
-		"web_secret_set":  g.WebSecret != "",
+		"web_secret_set":    g.WebSecret != "",
 	}
 	return map[string]any{
 		"proxies": proxies,
@@ -107,8 +116,9 @@ func (srv *Server) status() map[string]any {
 			"masqueh2": e.masque["masqueh2"],
 		},
 		"mihomo": map[string]any{
-			"running": mihomo.Running(),
-			"pid":     mihomo.pid,
+			"running":    process.Running,
+			"pid":        process.PID,
+			"generation": process.Generation,
 		},
 		"time": time.Now().Format(time.RFC3339),
 	}
@@ -149,8 +159,8 @@ func (srv *Server) handler() http.Handler {
 		if body.For == "" {
 			body.For = "both"
 		}
-		if body.For != "warp" && body.For != "masque" && body.For != "both" {
-			writeJSON(w, 400, map[string]string{"error": "for must be warp|masque|both"})
+		if body.For != "warp" && body.For != "masque" && body.For != "masqueh2" && body.For != "m2w" && body.For != "both" {
+			writeJSON(w, 400, map[string]string{"error": "for must be warp|masque|masqueh2|m2w|both"})
 			return
 		}
 		if body.Reason == "" {

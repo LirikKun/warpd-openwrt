@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -18,7 +19,7 @@ import (
 // Scans are serialized (one warpscout scan at a time) to keep CPU/RAM
 // usage predictable on the Filogic 820.
 type Orchestrator struct {
-	onApply func(name string)
+	onApply  func(name string)
 	settings *Settings
 
 	mu sync.Mutex
@@ -34,28 +35,43 @@ type Orchestrator struct {
 	lastScan   time.Time
 	lastResult string
 
-	scanCh chan scanRequest
+	scanCh       chan scanRequest
+	reserved     map[string]bool                               // accepted work, including requests not yet consumed
+	lastAttempt  map[string]time.Time                          // per underlying scan, including failures
+	scanner      func([]string, time.Duration) (string, error) // optional local test runner
+	scoutCommand func(context.Context, []string) *exec.Cmd     // optional local executable
+	now          func() time.Time                              // clock seam; set before starting the loop
 }
 
 type scanRequest struct {
-	for_   string
-	reason string
+	for_    string
+	reason  string
+	targets []string
+	force   bool
 }
 
 type endpoints struct {
-	warp      string
-	masque    map[string]string // "masque"/"masqueh2" -> ip:port
+	warp   string
+	masque map[string]string // "masque"/"masqueh2" -> ip:port
 }
 
 var (
-	stateMu   sync.RWMutex
-	stateEp   = endpoints{masque: map[string]string{}}
+	stateMu sync.RWMutex
+	stateEp = endpoints{masque: map[string]string{}}
 )
 
 func stateGetEndpoints() endpoints {
 	stateMu.RLock()
 	defer stateMu.RUnlock()
-	return stateEp
+	return copyEndpoints(stateEp)
+}
+
+func copyEndpoints(e endpoints) endpoints {
+	cp := endpoints{warp: e.warp, masque: make(map[string]string, len(e.masque))}
+	for k, v := range e.masque {
+		cp.masque[k] = v
+	}
+	return cp
 }
 
 func stateSetEndpoints(e endpoints) {
@@ -64,40 +80,109 @@ func stateSetEndpoints(e endpoints) {
 	if e.masque == nil {
 		e.masque = stateEp.masque
 	}
-	stateEp = e
+	stateEp = copyEndpoints(e)
 }
 
 func NewOrchestrator(s *Settings) *Orchestrator {
 	return &Orchestrator{
-		settings: s,
-		scanCh:   make(chan scanRequest, 16),
+		settings:    s,
+		scanCh:      make(chan scanRequest, 16),
+		reserved:    make(map[string]bool),
+		lastAttempt: make(map[string]time.Time),
+		now:         time.Now,
 	}
 }
 
 // requestScan queues a scan for a proxy (non-blocking).
 func (o *Orchestrator) requestScan(for_, reason string) bool {
+	return o.queueScan(for_, reason, false)
+}
+
+// scanTargets resolves proxy names to the underlying scans they need. A chain
+// may need scans even when its standalone warp/masque listeners are disabled.
+func scanTargets(g Settings, for_ string, force bool) []string {
+	wanted := make(map[string]bool)
+	addProxy := func(key string) {
+		if p := g.Proxies[key]; p != nil && p.Enabled && (force || p.Endpoint == "") {
+			wanted[key] = true
+		}
+	}
+	addChain := func() {
+		if p := g.Proxies["m2w"]; p != nil && p.Enabled {
+			if p.Inner == "" {
+				wanted["warp"] = true
+			}
+			if p.Outer == "" {
+				wanted["masque"] = true
+			}
+		}
+	}
+	switch for_ {
+	case "warp", "masque", "masqueh2":
+		addProxy(for_)
+	case "m2w":
+		addChain()
+	case "both":
+		for _, key := range []string{"warp", "masque", "masqueh2"} {
+			addProxy(key)
+		}
+		addChain()
+	default:
+		return nil
+	}
+	var targets []string
+	for _, key := range []string{"warp", "masque", "masqueh2"} {
+		if wanted[key] {
+			targets = append(targets, key)
+		}
+	}
+	return targets
+}
+
+func (o *Orchestrator) queueScan(for_, reason string, force bool) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.scanning {
 		return false
 	}
-	// DME-rescan throttle
+	// Resolve and reserve underlying targets before releasing the mutex, so
+	// duplicate health checks cannot flood the queue before its consumer runs.
 	g := o.settings.Snapshot()
-	if for_ == "warp" && reason == "DME exit" && !o.lastScan.IsZero() &&
-		time.Since(o.lastScan) < time.Duration(g.DMERescanGap)*time.Second {
+	targets := scanTargets(g, for_, force)
+	for _, key := range targets {
+		if o.reserved[key] {
+			return false
+		}
+	}
+	if !force {
+		eligible := targets[:0]
+		gap := time.Duration(max(60, g.DMERescanGap)) * time.Second
+		now := o.now()
+		for _, key := range targets {
+			if last := o.lastAttempt[key]; last.IsZero() || now.Sub(last) >= gap {
+				eligible = append(eligible, key)
+			}
+		}
+		targets = eligible
+	}
+	if len(targets) == 0 {
 		return false
 	}
 	select {
-	case o.scanCh <- scanRequest{for_: for_, reason: reason}:
+	case o.scanCh <- scanRequest{for_: for_, reason: reason, targets: targets, force: force}:
+		for _, key := range targets {
+			o.reserved[key] = true
+		}
 		return true
 	default:
 		return false
 	}
 }
 
-// ForceScan starts a scan immediately (used by the web UI button).
+// ForceScan queues an explicit scan, bypassing only the automatic cooldown.
+// Target validation, pending deduplication and active/busy protection still apply.
 func (o *Orchestrator) ForceScan(for_, reason string) bool {
-	return o.requestScan(for_, reason)
+	return o.queueScan(for_, reason, true)
 }
 
 // RegisterAccount creates a new WARP account with warpscout register.
@@ -122,13 +207,13 @@ func (o *Orchestrator) RegisterAccount(fresh bool) (string, error) {
 
 // ScanState is the JSON shape for the web UI.
 type ScanState struct {
-	Scanning  bool     `json:"scanning"`
-	For       string   `json:"for,omitempty"`
-	Reason    string   `json:"reason,omitempty"`
-	Started   string   `json:"started,omitempty"`
-	LastScan  string   `json:"last_scan,omitempty"`
-	LastResult string  `json:"last_result,omitempty"`
-	Log       []string `json:"log,omitempty"`
+	Scanning   bool     `json:"scanning"`
+	For        string   `json:"for,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+	Started    string   `json:"started,omitempty"`
+	LastScan   string   `json:"last_scan,omitempty"`
+	LastResult string   `json:"last_result,omitempty"`
+	Log        []string `json:"log,omitempty"`
 }
 
 func (o *Orchestrator) State() ScanState {
@@ -167,7 +252,7 @@ func (o *Orchestrator) runScanLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-o.scanCh:
-			o.runScan(req.for_, req.reason)
+			o.runRequest(req)
 		}
 	}
 }
@@ -176,36 +261,61 @@ func (o *Orchestrator) runScanLoop(ctx context.Context) {
 // The scan command writes its report to /tmp (RAM) and never to ROM.
 func (o *Orchestrator) runScan(for_, reason string) {
 	g := o.settings.Snapshot()
+	o.runRequest(scanRequest{for_: for_, reason: reason, targets: scanTargets(g, for_, false)})
+}
+
+func (o *Orchestrator) runRequest(req scanRequest) {
+	g := o.settings.Snapshot()
+	eligible := make(map[string]bool)
+	for _, key := range scanTargets(g, req.for_, req.force) {
+		eligible[key] = true
+	}
+	var targets []string
+	for _, key := range req.targets {
+		if eligible[key] {
+			targets = append(targets, key)
+		}
+	}
 
 	o.mu.Lock()
+	if len(targets) == 0 {
+		for _, key := range req.targets {
+			delete(o.reserved, key)
+		}
+		o.mu.Unlock()
+		return
+	}
 	o.scanning = true
-	o.scanFor = for_
-	o.scanReason = reason
-	o.scanStart = time.Now()
+	o.scanFor = req.for_
+	o.scanReason = req.reason
+	o.scanStart = o.now()
 	o.scanLog = nil
 	o.mu.Unlock()
 	defer func() {
 		o.mu.Lock()
 		o.scanning = false
-		o.lastScan = time.Now()
+		for _, key := range req.targets {
+			delete(o.reserved, key)
+		}
 		o.mu.Unlock()
 	}()
 
-	o.log("scan for %s (reason: %s)", for_, reason)
-
-	if for_ == "warp" || for_ == "both" {
-		o.scanWarp(g)
-	}
-	if for_ == "masque" || for_ == "both" {
-		if g.Proxies["masque"].Enabled {
-			o.scanMasque(g, "masque")
+	o.log("scan for %s (reason: %s)", req.for_, req.reason)
+	for _, key := range targets {
+		if g.Proxies[key] == nil {
+			g.Proxies[key] = (&ProxySettings{}).defaults(key)
 		}
-		if g.Proxies["masqueh2"].Enabled {
-			o.scanMasque(g, "masqueh2")
+		if key == "warp" {
+			o.scanWarp(g)
+		} else {
+			o.scanMasque(g, key)
 		}
+		o.mu.Lock()
+		o.lastScan = o.now()
+		o.lastAttempt[key] = o.lastScan
+		o.mu.Unlock()
 	}
 }
-
 
 // excludeArgs turns "DME,SVO" / "RU,KZ" into warpscout -exclude-* flags.
 // The hard-coded DME (warp) default stays: user filters only add to it
@@ -371,11 +481,19 @@ func (o *Orchestrator) scanMasque(g Settings, key string) {
 // runWarpScout executes a scan command, streaming plain output into the
 // scan log (which the web UI polls). The account file is passed via -a.
 func (o *Orchestrator) runWarpScout(args []string, maxWait time.Duration) (string, error) {
+	if o.scanner != nil {
+		return o.scanner(args, maxWait)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), maxWait)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, warpScout, args...)
-	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(),
+	var cmd *exec.Cmd
+	if o.scoutCommand != nil {
+		cmd = o.scoutCommand(ctx, args)
+	} else {
+		cmd = exec.CommandContext(ctx, warpScout, args...)
+		cmd.Dir = workDir
+	}
+	cmd.Env = append(cmd.Environ(),
 		"GOMEMLIMIT=48MiB",
 		"NO_COLOR=1",
 		"TERM=dumb",
@@ -390,20 +508,27 @@ func (o *Orchestrator) runWarpScout(args []string, maxWait time.Duration) (strin
 	}
 	var acc strings.Builder
 	buf := make([]byte, 2048)
-	go func() {
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				chunk := string(buf[:n])
-				acc.WriteString(chunk)
-				o.logPlain(strings.Split(chunk, "\n"))
-			}
-			if err != nil {
-				return
-			}
+	// StdoutPipe must be drained before Wait closes it. Read and accumulate on
+	// this goroutine so returning output cannot race with the log reader.
+	var readErr error
+	for {
+		n, err := stdout.Read(buf)
+		if n > 0 {
+			chunk := string(buf[:n])
+			acc.WriteString(chunk)
+			o.logPlain(strings.Split(chunk, "\n"))
 		}
-	}()
+		if err != nil {
+			if err != io.EOF {
+				readErr = err
+			}
+			break
+		}
+	}
 	err = cmd.Wait()
+	if err == nil {
+		err = readErr
+	}
 	return acc.String(), err
 }
 

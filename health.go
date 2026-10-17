@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -16,6 +19,13 @@ import (
 // and parses {country, colo:{iata,city,cca2}}. It is the same probe
 // warpscout itself uses (Referer header required for a non-empty answer).
 func socksMetaCheck(ctx context.Context, listen string, port int) (exitParse, error) {
+	return socksMetaCheckBudget(ctx, listen, port, 35*time.Second)
+}
+
+func socksMetaCheckBudget(ctx context.Context, listen string, port int, budget time.Duration) (exitParse, error) {
+	// One budget covers dialing, all protocol stages, retries, and backoff.
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	d := net.Dialer{Timeout: 12 * time.Second}
 	addr := net.JoinHostPort(listen, fmt.Sprintf("%d", port))
 	if listen == "0.0.0.0" || listen == "::" {
@@ -30,9 +40,12 @@ func socksMetaCheck(ctx context.Context, listen string, port int) (exitParse, er
 			return res, nil
 		}
 		lastErr = err
+		if attempt == 2 {
+			break
+		}
 		select {
 		case <-ctx.Done():
-			return exitParse{}, lastErr
+			return exitParse{}, ctx.Err()
 		case <-time.After(3 * time.Second):
 		}
 	}
@@ -40,12 +53,24 @@ func socksMetaCheck(ctx context.Context, listen string, port int) (exitParse, er
 }
 
 func socksMetaCheckOnce(ctx context.Context, d net.Dialer, addr string) (exitParse, error) {
+	return socksMetaCheckOnceWithRoots(ctx, d, addr, nil)
+}
+
+// roots is nil in production (system trust); the seam permits offline TLS fixtures.
+func socksMetaCheckOnceWithRoots(ctx context.Context, d net.Dialer, addr string, roots *x509.CertPool) (result exitParse, retErr error) {
+	defer func() {
+		if retErr != nil && ctx.Err() != nil {
+			retErr = ctx.Err()
+		}
+	}()
 	raw, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return exitParse{}, fmt.Errorf("dial proxy: %w", err)
 	}
 	defer raw.Close()
-	_ = raw.SetDeadline(time.Now().Add(35 * time.Second))
+	stopCancel := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	defer stopCancel()
+	_ = setHealthDeadline(ctx, raw, 35*time.Second)
 
 	// SOCKS5: greet (no auth), CONNECT speed.cloudflare.com:443
 	if _, err := raw.Write([]byte{5, 1, 0}); err != nil {
@@ -65,12 +90,8 @@ func socksMetaCheckOnce(ctx context.Context, d net.Dialer, addr string) (exitPar
 	if _, err := raw.Write(req); err != nil {
 		return exitParse{}, fmt.Errorf("connect: %w", err)
 	}
-	rep := make([]byte, 10)
-	if _, err := ioReadFull(raw, rep); err != nil {
-		return exitParse{}, fmt.Errorf("connect reply: %w", err)
-	}
-	if rep[1] != 0 {
-		return exitParse{}, fmt.Errorf("connect refused (%d)", rep[1])
+	if err := readSOCKSConnectReply(raw); err != nil {
+		return exitParse{}, err
 	}
 
 	// TLS through the tunnel
@@ -78,11 +99,12 @@ func socksMetaCheckOnce(ctx context.Context, d net.Dialer, addr string) (exitPar
 		ServerName:         host,
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: false,
+		RootCAs:            roots,
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return exitParse{}, fmt.Errorf("tls: %w", err)
 	}
-	_ = tlsConn.SetDeadline(time.Now().Add(20 * time.Second))
+	_ = setHealthDeadline(ctx, tlsConn, 20*time.Second)
 	httpReq := strings.Join([]string{
 		"GET /meta HTTP/1.1",
 		"Host: " + host,
@@ -95,37 +117,93 @@ func socksMetaCheckOnce(ctx context.Context, d net.Dialer, addr string) (exitPar
 	if _, err := tlsConn.Write([]byte(httpReq)); err != nil {
 		return exitParse{}, fmt.Errorf("write: %w", err)
 	}
-	br := bufio.NewReader(tlsConn)
-	var status string
-	var body []byte
-	// read status line + headers
-	status, rerr := br.ReadString('\n')
-	if rerr != nil {
-		return exitParse{}, fmt.Errorf("read status: %w", rerr)
+	return readMetaResponse(bufio.NewReader(tlsConn))
+}
+
+func setHealthDeadline(ctx context.Context, conn net.Conn, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
 	}
-	if !strings.Contains(status, "200") {
-		return exitParse{}, fmt.Errorf("meta status %q", strings.TrimSpace(status))
+	return conn.SetDeadline(deadline)
+}
+
+func readSOCKSConnectReply(r io.Reader) error {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return fmt.Errorf("connect reply: %w", err)
 	}
+	if hdr[0] != 5 || hdr[2] != 0 {
+		return fmt.Errorf("invalid SOCKS CONNECT reply header")
+	}
+	if hdr[1] != 0 {
+		return fmt.Errorf("connect refused (%d)", hdr[1])
+	}
+	var addressLen int
+	switch hdr[3] {
+	case 1:
+		addressLen = net.IPv4len
+	case 4:
+		addressLen = net.IPv6len
+	case 3:
+		var size [1]byte
+		if _, err := io.ReadFull(r, size[:]); err != nil {
+			return fmt.Errorf("connect domain length: %w", err)
+		}
+		addressLen = int(size[0])
+		if addressLen == 0 {
+			return fmt.Errorf("empty SOCKS CONNECT domain")
+		}
+	default:
+		return fmt.Errorf("connect address type %d", hdr[3])
+	}
+	if _, err := io.ReadFull(r, make([]byte, addressLen+2)); err != nil {
+		return fmt.Errorf("connect address: %w", err)
+	}
+	return nil
+}
+
+func readMetaResponse(br *bufio.Reader) (exitParse, error) {
+	// Bound the entire status/header block before net/http builds its map.
+	// ReadByte uses br's bounded buffer and never buffers/drains the body.
+	const maxMetaHeaders = 16 * 1024
+	head := make([]byte, 0, maxMetaHeaders)
+	lineStart := 0
 	for {
-		line, rerr := br.ReadString('\n')
-		if rerr != nil {
-			return exitParse{}, fmt.Errorf("read headers: %w", rerr)
+		if len(head) == maxMetaHeaders {
+			return exitParse{}, fmt.Errorf("meta headers exceed %d bytes", maxMetaHeaders)
 		}
-		if strings.TrimSpace(line) == "" {
-			break
-		}
-	}
-	// read body (bounded)
-	buf := make([]byte, 4096)
-	total := 0
-	for total < 4096 {
-		n, err := br.Read(buf[total:])
-		total += n
+		b, err := br.ReadByte()
 		if err != nil {
-			break
+			return exitParse{}, fmt.Errorf("meta invalid HTTP response")
+		}
+		head = append(head, b)
+		if b == '\n' {
+			line := head[lineStart:]
+			if len(line) == 1 || len(line) == 2 && line[0] == '\r' {
+				break
+			}
+			lineStart = len(head)
 		}
 	}
-	body = buf[:total]
+	resp, err := http.ReadResponse(bufio.NewReader(io.MultiReader(strings.NewReader(string(head)), br)), nil)
+	if err != nil {
+		// net/http errors may quote peer-controlled status/header values.
+		return exitParse{}, fmt.Errorf("meta invalid HTTP response")
+	}
+	// The caller owns and closes the connection. Body.Close here can drain an
+	// arbitrarily large response, defeating the body limit on error paths.
+	if resp.StatusCode != http.StatusOK {
+		return exitParse{}, fmt.Errorf("meta status %d", resp.StatusCode)
+	}
+	const maxMetaBody = 4096
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetaBody+1))
+	if err != nil {
+		return exitParse{}, fmt.Errorf("meta body read failed")
+	}
+	if len(body) > maxMetaBody {
+		return exitParse{}, fmt.Errorf("meta body exceeds %d bytes", maxMetaBody)
+	}
 
 	var m struct {
 		Country string `json:"country"`
@@ -136,13 +214,16 @@ func socksMetaCheckOnce(ctx context.Context, d net.Dialer, addr string) (exitPar
 		} `json:"colo"`
 	}
 	if err := json.Unmarshal(body, &m); err != nil {
-		return exitParse{}, fmt.Errorf("meta json: %w (%q)", err, string(body[:min(120, len(body))]))
+		return exitParse{}, fmt.Errorf("meta invalid JSON")
+	}
+	if strings.TrimSpace(m.Country) == "" || strings.TrimSpace(m.Colo.IATA) == "" {
+		return exitParse{}, fmt.Errorf("meta missing country or colo.iata")
 	}
 	info := m.Country
 	if m.Colo.IATA != "" {
 		info = fmt.Sprintf("%s via %s (%s node)", m.Country, m.Colo.City, m.Colo.IATA)
 	}
-	return exitParse{info: info, node: m.Colo.IATA, country: m.Colo.CCA2}, nil
+	return exitParse{info: info, node: m.Colo.IATA, country: m.Country}, nil
 }
 
 func ioReadFull(c net.Conn, buf []byte) (int, error) {
