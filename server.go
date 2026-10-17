@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -123,6 +126,7 @@ func (srv *Server) status() map[string]any {
 		"web_secret_set":    g.WebSecret != "",
 	}
 	return map[string]any{
+		"version": version,
 		"proxies": proxies,
 		"scan":    srv.orch.State(),
 		"config":  cfg,
@@ -142,6 +146,38 @@ func (srv *Server) status() map[string]any {
 
 func (srv *Server) handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/proxy", func(w http.ResponseWriter, r *http.Request) {
+		if !srv.authorized(r) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
+		var body struct {
+			Proxy   string `json:"proxy"`
+			Enabled *bool  `json:"enabled"`
+		}
+		if err := decodeConfigJSON(w, r, &body); err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		if body.Enabled == nil || srv.cfg.Snapshot().Proxies[body.Proxy] == nil {
+			writeJSON(w, 400, map[string]string{"error": "proxy must be warp|masque|masqueh2|m2w and enabled must be boolean"})
+			return
+		}
+		srv.orch.applyMu.Lock()
+		defer srv.orch.applyMu.Unlock()
+		if _, err := srv.cfg.ApplyConfigPatch(map[string]any{body.Proxy + "_enabled": *body.Enabled}); err != nil {
+			writeJSON(w, 500, map[string]any{"error": err.Error(), "applied": false})
+			return
+		}
+		if *body.Enabled {
+			srv.orch.queueMissing("explicit proxy enable")
+		}
+		if err := srv.orch.applyLocked(); err != nil {
+			writeJSON(w, 503, map[string]any{"error": err.Error(), "applied": false, "desired_enabled": *body.Enabled})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"proxy": body.Proxy, "enabled": *body.Enabled, "applied": true})
+	})
 
 	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
 		if !srv.authorized(r) {
@@ -201,6 +237,8 @@ func (srv *Server) handler() http.Handler {
 			writeJSON(w, 400, map[string]string{"error": "bad json"})
 			return
 		}
+		srv.orch.applyMu.Lock()
+		defer srv.orch.applyMu.Unlock()
 		switch body.Proxy {
 		case "warp":
 			if !validEndpoint(body.Endpoint) {
@@ -249,6 +287,8 @@ func (srv *Server) handler() http.Handler {
 			writeJSON(w, 400, map[string]string{"error": "bad json"})
 			return
 		}
+		srv.orch.applyMu.Lock()
+		defer srv.orch.applyMu.Unlock()
 		switch body.Proxy {
 		case "warp", "masque", "masqueh2":
 			_ = uciSet("warpd."+body.Proxy+".endpoint", "")
@@ -279,14 +319,7 @@ func (srv *Server) handler() http.Handler {
 			return
 		}
 		go func() {
-			mihomo.Stop()
-			g := srv.cfg.Snapshot()
-			acc, err := loadAccount(account)
-			if err != nil {
-				logg.Printf("restart: %v", err)
-				return
-			}
-			if err := mihomo.Ensure(g, stateGetEndpoints(), acc); err != nil {
+			if err := srv.orch.restartCurrent(); err != nil {
 				logg.Printf("restart: mihomo %v", err)
 			} else {
 				logg.Printf("mihomo restarted")
@@ -321,16 +354,28 @@ func (srv *Server) handler() http.Handler {
 			return
 		}
 		var patch map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		if err := decodeConfigJSON(w, r, &patch); err != nil || patch == nil {
 			writeJSON(w, 400, map[string]string{"error": "bad json"})
 			return
 		}
+		srv.orch.applyMu.Lock()
+		defer srv.orch.applyMu.Unlock()
 		applied, err := srv.cfg.ApplyConfigPatch(patch)
 		if err != nil {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
 		getCheck("m2w").clearGeo()
+		for _, key := range proxyNames {
+			if enable, _ := patch[key+"_enabled"].(bool); enable {
+				srv.orch.queueMissing("explicit config enable")
+				break
+			}
+		}
+		if err := srv.orch.applyLocked(); err != nil {
+			writeJSON(w, 503, map[string]any{"error": err.Error(), "applied": false, "persisted": applied})
+			return
+		}
 		writeJSON(w, 200, map[string]any{"applied": applied})
 	})
 
@@ -344,7 +389,55 @@ func (srv *Server) handler() http.Handler {
 		w.Write([]byte(indexHTML))
 	})
 
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions && !sameOriginMutation(r) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin mutation forbidden"})
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// Browser mutations must come from the actual request origin. Do not trust
+// forwarded headers; non-browser clients without Origin retain bearer/LAN access.
+func sameOriginMutation(r *http.Request) bool {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+		return false
+	}
+	origins, present := r.Header["Origin"]
+	if !present {
+		return true
+	}
+	if len(origins) != 1 {
+		return false
+	}
+	origin, err := url.Parse(origins[0])
+	if err != nil || origin.Host == "" || origin.User != nil || origins[0] != origin.Scheme+"://"+origin.Host {
+		return false
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return origin.Scheme == scheme && strings.EqualFold(origin.Host, r.Host)
+}
+
+// Config mutations accept one bounded JSON document, never trailing values.
+func decodeConfigJSON(w http.ResponseWriter, r *http.Request, value any) error {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return fmt.Errorf("Content-Type must be application/json")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if err := d.Decode(value); err != nil {
+		return fmt.Errorf("bad json: %w", err)
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("bad json: expected one bounded JSON object")
+	}
+	return nil
 }
 
 func (srv *Server) ListenAndServe() error {
@@ -397,13 +490,7 @@ func isIPOrHost(s string) bool {
 
 // reapply re-renders the mihomo config with current settings/endpoints.
 func (srv *Server) reapply() {
-	g := srv.cfg.Snapshot()
-	acc, err := loadAccount(account)
-	if err != nil {
-		logg.Printf("reapply: %v", err)
-		return
-	}
-	if err := mihomo.Ensure(g, stateGetEndpoints(), acc); err != nil {
+	if err := srv.orch.applyCurrent(); err != nil {
 		logg.Printf("reapply: mihomo %v", err)
 	} else {
 		logg.Printf("mihomo config re-applied")
@@ -420,7 +507,7 @@ func liveEndpoint(name string, p *ProxySettings, e endpoints) (ep, outer string)
 	case "masqueh2":
 		return firstNonEmpty(p.Endpoint, e.masque["masqueh2"]), ""
 	case "m2w":
-		return firstNonEmpty(p.Inner, e.warp), firstNonEmpty(p.Outer, e.masque["masque"], e.warp)
+		return firstNonEmpty(p.Inner, e.warp), firstNonEmpty(p.Outer, e.masque["masque"])
 	}
 	return "", ""
 }

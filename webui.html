@@ -3,375 +3,246 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>warpd — WARP proxies</title>
+<meta name="referrer" content="no-referrer">
+<title>warpd — управление прокси</title>
 <style>
-:root{
-  --bg:#111318; --panel:#1a1d24; --panel2:#22262f; --line:#2c313c;
-  --text:#d7dae0; --dim:#8b93a1; --ok:#4cc38a; --warn:#f5a623; --bad:#e5484d;
-  --accent:#5c9eff; --mono:ui-monospace,Menlo,Consolas,monospace;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:16px;max-width:860px;margin:0 auto}
-h1{font-size:16px;font-weight:600;letter-spacing:.02em;display:flex;align-items:center;gap:10px;margin-bottom:14px}
-h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);display:inline-block}
-h1 .dot.ok{background:var(--ok)} h1 .dot.bad{background:var(--bad)} h1 .dot.warn{background:var(--warn)}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:18px 0 8px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
-.row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:3px 0}
-.row .k{color:var(--dim);font-size:12px;min-width:110px}
-.row .v{font-family:var(--mono);font-size:12.5px;text-align:right;word-break:break-all}
-.v.ok{color:var(--ok)} .v.bad{color:var(--bad)} .v.warn{color:var(--warn)} .v.dim{color:var(--dim)}
-.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
-.badge.on{border-color:var(--ok);color:var(--ok)}
-.badge.bad{border-color:var(--bad);color:var(--bad)}
-.badge.warn{border-color:var(--warn);color:var(--warn)}
-.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer}
-button:hover{border-color:var(--accent)}
-button:disabled{opacity:.45;cursor:default}
-button.primary{border-color:var(--accent);color:var(--accent)}
-.grid4{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(max-width:720px){.grid4{grid-template-columns:1fr}}
-input[type=text],input[type=number],select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 8px;font-size:13px;width:100%}
-input:focus,select:focus{outline:none;border-color:var(--accent)}
-label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
-.log{font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;background:#0d0f13;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:220px;overflow-y:auto;color:#9aa3b2}
-.muted{color:var(--dim);font-size:12px}
-.hide{display:none}
-.toast{position:fixed;bottom:16px;right:16px;background:var(--panel2);border:1px solid var(--accent);border-radius:8px;padding:8px 14px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:60%}
-.toast.show{opacity:1}
-.spin{display:inline-block;width:10px;height:10px;border:2px solid var(--warn);border-top-color:transparent;border-radius:50%;animation:sp 1s linear infinite;vertical-align:-1px;margin-right:6px}
-@keyframes sp{to{transform:rotate(360deg)}}
+:root{color-scheme:light dark;--bg:#f6f6f3;--paper:#fff;--ink:#222824;--muted:#626960;--line:#d8ddd5;--soft:#edefe9;--accent:#28563b;--ok:#24603b;--warn:#85500e;--bad:#a02f27;--focus:#215ca5;--mono:Consolas,"Courier New",monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 Arial,"Segoe UI",sans-serif}main{max-width:1080px;margin:0 auto;padding:38px 32px 24px}h1,h2,h3,p{margin:0}h1{font-size:24px;letter-spacing:-.7px}h2{font-size:17px;font-weight:600}h3{font-size:16px}button,input,select{font:inherit;color:inherit}button,summary{cursor:pointer}button{min-height:44px;border:1px solid var(--line);border-radius:5px;background:var(--paper);padding:9px 14px}button:hover:not(:disabled){border-color:var(--muted);background:var(--soft)}button:disabled{cursor:not-allowed;opacity:.55}button.primary{background:var(--accent);border-color:var(--accent);color:#fff}button.danger{color:var(--bad)}:focus-visible{outline:3px solid var(--focus);outline-offset:3px}input{max-width:100%;width:100%;min-height:44px;border:1px solid var(--line);border-radius:4px;background:var(--paper);padding:9px 10px}input[type=checkbox]{width:20px;min-height:20px;accent-color:var(--accent)}input:disabled{opacity:.65}label{display:block;margin-bottom:6px}.muted,.micro{color:var(--muted)}.micro{font-size:13px}.mono{font:13px/1.6 var(--mono);overflow-wrap:anywhere}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}[hidden]{display:none!important}.topline{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:26px}.eyebrow{font-size:13px;color:var(--muted);margin-top:2px}.connection{text-align:right;font-size:13px}.notice{border:1px solid var(--line);padding:12px 14px;background:var(--paper);border-radius:4px;margin-bottom:16px;overflow-wrap:anywhere}.notice p+p{margin-top:5px}.auth-line,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.auth-line input{flex:1 1 220px}.auth-line{margin-top:10px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:20px 0 12px}.section-heading p{margin-top:3px}.services{background:var(--paper);border-top:1px solid var(--line)}.column-head,.service-main{display:grid;grid-template-columns:minmax(145px,1fr) minmax(220px,2fr) 132px;gap:24px;align-items:center}.column-head{font-size:13px;color:var(--muted);padding:8px 18px}.column-head span:last-child{text-align:right}.service{position:relative;padding:14px 18px;border-bottom:1px solid var(--line);min-width:0}.service-main{min-height:76px}.service .identity{align-self:start}.service .identity p{margin-top:3px}.health{font-size:13px;overflow-wrap:anywhere}.health p+p{margin-top:3px}.toggle{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:6px 0 6px 8px;border:0;background:transparent!important;min-width:132px;min-height:44px}.toggle-label{font-size:13px}.track{position:relative;display:inline-block;width:42px;height:24px;border:1px solid var(--muted);background:var(--soft);border-radius:16px;flex-shrink:0}.track:after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--muted)}.toggle[aria-checked=true] .track{background:var(--accent);border-color:var(--accent)}.toggle[aria-checked=true] .track:after{left:21px;background:#fff}.toggle[aria-busy=true] .track{background:var(--soft);border-color:var(--muted)}.toggle[aria-busy=true] .track:after{background:var(--muted)}summary{min-height:44px;display:list-item;align-content:center;color:var(--muted);font-size:13px;width:fit-content;max-width:100%;padding:10px 0}summary:hover{color:var(--ink)}details[open]>summary{color:var(--ink)}.service>details{margin:0}.service>details>summary{position:absolute;left:18px;top:42px}.detail-content{padding-top:12px;border-top:1px dashed var(--line)}dl{margin:0 0 16px;display:grid;grid-template-columns:210px minmax(0,1fr);column-gap:18px;row-gap:9px;font-size:13px}dt{color:var(--muted)}dd{margin:0;min-width:0;overflow-wrap:anywhere}.copy-line{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.copy-line button{font-size:13px;padding:5px 10px}.pin-editor{border-top:1px solid var(--line);padding-top:14px}.pin-fields{display:flex;gap:14px;flex-wrap:wrap}.field{flex:1 1 220px;min-width:0}.field label{font-size:13px}.actions{margin-top:12px}.feedback{font-size:13px;overflow-wrap:anywhere;margin-top:8px}.policy-note{font-size:13px;color:var(--muted);margin:12px 0 25px;max-width:85ch}.secondary{border-top:1px solid var(--line);padding:4px 0}.secondary>summary{font-size:15px;color:var(--ink);font-weight:600;min-height:56px}.secondary-body{padding:0 0 22px}.secondary-body>p{margin-bottom:12px}.scan-panel{border-top:1px solid var(--line);padding:17px 0;margin-top:18px}.scan-heading{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:14px}.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;flex-shrink:0}@keyframes spin{to{transform:rotate(360deg)}}.log{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.65 var(--mono);padding:12px;background:var(--soft);border:1px solid var(--line);border-radius:4px;max-height:260px;overflow:auto;margin:12px 0 0}.settings-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 24px}.settings-fields .wide{grid-column:1/-1}.checkbox-field{display:flex;align-items:center;gap:10px;min-height:44px}.checkbox-field label{margin:0}.maintenance{margin-top:20px}.maintenance>summary{color:var(--bad)}footer{border-top:1px solid var(--line);padding-top:14px;margin-top:12px;font-size:13px;color:var(--muted);overflow-wrap:anywhere}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(prefers-color-scheme:dark){:root{--bg:#191c1a;--paper:#202421;--ink:#e1e5df;--muted:#a4afa2;--line:#414a40;--soft:#282f29;--accent:#426e50;--ok:#9fc7a2;--warn:#e1b878;--bad:#f2a49c;--focus:#a4c9ff}}
+@media(max-width:720px){main{padding:22px 16px 16px}.topline{align-items:flex-start;margin-bottom:22px}.connection{max-width:155px}.column-head{display:none}.service{padding:16px 12px}.service-main{grid-template-columns:minmax(0,1fr) 132px;gap:8px 12px;min-height:0}.service>details>summary{position:static}.health{grid-column:1/-1;grid-row:2}.control{grid-column:2;grid-row:1}.toggle{min-width:0;width:100%}.settings-fields{grid-template-columns:minmax(0,1fr)}dl{grid-template-columns:minmax(0,1fr);gap:3px}dd{margin-bottom:8px}.section-heading{align-items:flex-start}.section-heading .micro{max-width:32ch}.scan-panel .actions>button{flex:1}.topline h1{font-size:23px}.pin-fields{display:block}.pin-fields .field+.field{margin-top:12px}.log{max-height:220px}.auth-line button{flex:1}.notice{padding:12px}.settings-fields .wide{grid-column:auto}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
-<h1><span class="dot" id="gdot"></span> warpd</h1>
-
-<div class="grid4">
-  <div class="card" id="card-warp">
-    <div class="row"><div><b>WARP</b> <span class="badge" id="warp-badge">—</span></div><div class="v" id="warp-addr">…</div></div>
-    <div class="row"><span class="k">endpoint</span><span class="v" id="warp-ep">—</span></div>
-    <div class="row"><span class="k">выход</span><span class="v" id="warp-exit">—</span></div>
-    <div class="row"><span class="k">проверки</span><span class="v dim" id="warp-check">—</span></div>
-    <div class="actions">
-      <button onclick="restart('warp')">перезапуск</button>
-      <button onclick="scan('warp')">поиск</button>
-      <button id="warp-pinbtn" onclick="togglePin('warp')">эндпоинт вручную</button>
-      <button id="warp-clearbtn" class="hide" onclick="clearPin('warp')">снять пин</button>
-    </div>
-    <div id="warp-pinform" class="hide" style="margin-top:8px">
-      <label>эндпоинт ip:port</label>
-      <input type="text" id="warp-epin" placeholder="162.159.198.1:2408">
-      <div class="actions"><button class="primary" onclick="setEndpoint()">применить</button></div>
-    </div>
-  </div>
-
-  <div class="card" id="card-masque">
-    <div class="row"><div><b>MASQUE</b> <span class="badge" id="masque-badge">—</span></div><div class="v" id="masque-addr">…</div></div>
-    <div class="row"><span class="k">endpoint</span><span class="v" id="masque-ep">—</span></div>
-    <div class="row"><span class="k">выход</span><span class="v" id="masque-exit">—</span></div>
-    <div class="row"><span class="k">проверки</span><span class="v dim" id="masque-check">—</span></div>
-    <div class="actions">
-      <button onclick="restart('masque')">перезапуск</button>
-      <button onclick="scan('masque')">поиск</button>
-      <button id="masque-pinbtn" onclick="togglePin('masque')">эндпоинт вручную</button>
-      <button id="masque-clearbtn" class="hide" onclick="clearPin('masque')">снять пин</button>
-    </div>
-    <div id="masque-pinform" class="hide" style="margin-top:8px">
-      <label>эндпоинт ip:port</label>
-      <input type="text" id="masque-epin" placeholder="162.159.198.2:500">
-      <div class="actions"><button class="primary" onclick="setEndpoint()">применить</button></div>
-    </div>
-    <p class="muted" style="margin-top:6px">CONNECT-IP over QUIC. Нода не выбирается: у MASQUE одна нода на сеть.</p>
-  </div>
-
-  <div class="card" id="card-masqueh2">
-    <div class="row"><div><b>MASQUE-H2</b> <span class="badge" id="masqueh2-badge">—</span></div><div class="v" id="masqueh2-addr">…</div></div>
-    <div class="row"><span class="k">endpoint</span><span class="v" id="masqueh2-ep">—</span></div>
-    <div class="row"><span class="k">выход</span><span class="v" id="masqueh2-exit">—</span></div>
-    <div class="row"><span class="k">проверки</span><span class="v dim" id="masqueh2-check">—</span></div>
-    <div class="actions">
-      <button onclick="restart('masqueh2')">перезапуск</button>
-      <button onclick="scan('masqueh2')">поиск</button>
-      <button id="masqueh2-pinbtn" onclick="togglePin('masqueh2')">эндпоинт вручную</button>
-      <button id="masqueh2-clearbtn" class="hide" onclick="clearPin('masqueh2')">снять пин</button>
-    </div>
-    <div id="masqueh2-pinform" class="hide" style="margin-top:8px">
-      <label>эндпоинт ip:port</label>
-      <input type="text" id="masqueh2-epin" placeholder="162.159.198.2:500">
-      <div class="actions"><button class="primary" onclick="setEndpoint()">применить</button></div>
-    </div>
-    <p class="muted" style="margin-top:6px">Тот же MASQUE поверх TCP — снаружи выглядит как обычный HTTPS.</p>
-  </div>
-
-
-  <div class="card" id="card-m2w">
-    <div class="row"><div><b>MASQUE → WARP</b> <span class="badge" id="m2w-badge">—</span></div><div class="v" id="m2w-addr">…</div></div>
-    <div class="row"><span class="k">внешний (masque)</span><span class="v" id="m2w-outer">—</span></div>
-    <div class="row"><span class="k">внутренний (warp)</span><span class="v" id="m2w-ep">—</span></div>
-    <div class="row"><span class="k">выход</span><span class="v" id="m2w-exit">—</span></div>
-    <div class="row"><span class="k">проверки</span><span class="v dim" id="m2w-check">—</span></div>
-    <div class="actions">
-      <button onclick="restart('m2w')">перезапуск</button>
-      <button id="m2w-pinbtn" onclick="togglePin('m2w')">эндпоинты вручную</button>
-      <button id="m2w-clearbtn" class="hide" onclick="clearPin('m2w')">снять пин</button>
-    </div>
-    <div id="m2w-pinform" class="hide" style="margin-top:8px">
-      <label>внешний masque ip:port</label>
-      <input type="text" id="m2w-outin" placeholder="162.159.198.2:8443">
-      <label>внутренний warp ip:port</label>
-      <input type="text" id="m2w-inin" placeholder="8.47.69.19:2408">
-      <div class="actions"><button class="primary" onclick="setEndpoint()">применить</button></div>
-    </div>
-    <p class="muted" style="margin-top:6px">AWG внутри MASQUE-туннеля.</p>
-  </div>
-
-  
-<h2>поиск эндпоинтов</h2>
-<div class="card">
-  <div class="row"><span class="k">состояние</span><span class="v" id="scan-state">—</span></div>
-  <div class="row"><span class="k">результат</span><span class="v" id="scan-result">—</span></div>
-  <div class="log" id="scan-log" style="margin-top:8px"></div>
-  <div class="actions">
-    <button class="primary" id="scan-btn" onclick="scan('both')">новый поиск (все)</button>
-  </div>
-</div>
-
-<h2>аккаунт WARP</h2>
-<div class="card">
-  <div class="actions">
-    <button onclick="register(false)">ротация ключей (register)</button>
-    <button onclick="register(true)">новый аккаунт (-fresh)</button>
-  </div>
-  <p class="muted" style="margin-top:8px">register обновляет ключи существующего аккаунта; -fresh создаёт полностью новый. Результат — в журнале.</p>
-</div>
-
-<h2>настройки</h2>
-<div class="card">
-  <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-    <div>
-      <label>период проверки выхода, сек (мин. 10)</label>
-      <input type="number" id="cfg-check_period" min="10" max="86400">
-      <label>мин. интервал DME-рескана, сек</label>
-      <input type="number" id="cfg-dme_rescan_gap" min="60" max="86400">
-      <label>рестарт после N неудач</label>
-      <input type="number" id="cfg-fail_restart" min="1" max="100">
-    </div>
-    <div>
-      <label>рескан после N неудач</label>
-      <input type="number" id="cfg-fail_rescan" min="2" max="100">
-      <label>адресов на подсеть (-n)</label>
-      <input type="number" id="cfg-scan_sample" min="1" max="50">
-      <label>параллельных туннелей (-jt)</label>
-      <input type="number" id="cfg-scan_jobs" min="1" max="32">
-      <label>макс. пинг эндпоинта, мс (0 = без лимита)</label>
-      <input type="number" id="cfg-max_ping" min="0" max="5000">
-    </div>
-  </div>
-  <label>исключить ноды (DME,SVO…)</label>
-  <input type="text" id="cfg-exclude_nodes" placeholder="DME">
-  <label>исключить страны (RU,KZ…)</label>
-  <input type="text" id="cfg-exclude_countries" placeholder="RU">
-  <div class="actions"><button class="primary" onclick="saveConfig()">сохранить</button></div>
-</div>
-
-<h2>журнал</h2>
-<div class="card"><div class="log" id="main-log"></div></div>
-
-<p class="muted" id="footer">…</p>
-<div class="toast" id="toast"></div>
-
+<main>
+<header class="topline"><div><h1>warpd</h1><p class="eyebrow">Консоль прокси</p></div><div class="connection"><p id="connection" role="status">Подключение…</p><p class="muted" id="updated">Ожидание статуса</p></div></header>
+<section id="auth" class="notice" hidden aria-labelledby="auth-title"><h2 id="auth-title">Доступ к управлению</h2><p class="micro">Введите токен API. Он хранится только в памяти этой вкладки.</p><form id="auth-form" class="auth-line"><label class="sr-only" for="token">Токен API</label><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Токен API" required><button type="submit">Подключиться</button></form><p id="auth-error" class="feedback bad" role="status"></p></section>
+<div id="message" class="notice" role="status" aria-live="polite" hidden></div>
+<section aria-labelledby="services-title"><div class="section-heading"><div><h2 id="services-title">Прокси</h2><p class="micro">Переключатель меняет настройку сервиса. Готовность проверяется отдельно.</p></div></div><div class="column-head" aria-hidden="true"><span>Сервис</span><span>Сеть / политика выхода</span><span>Включён</span></div><div id="services" class="services"></div><p class="policy-note">Политика fail-closed: неподтверждённый или запрещённый выход не считается готовым. Это оценка, не блокировка трафика: доступный SOCKS может продолжать передавать данные.</p></section>
+<section id="scan-panel" class="scan-panel" aria-labelledby="scan-title"><div class="scan-heading"><span id="scan-spinner" class="spin" hidden aria-hidden="true"></span><h2 id="scan-title">Поиск эндпоинтов</h2></div><p id="scan-state" class="micro" role="status">Нет данных</p><p id="scan-result" class="micro muted"></p><div class="actions"><button id="scan-btn" data-write type="button">Найти для всех</button></div><details id="scan-details"><summary>Журнал поиска</summary><pre id="scan-log" class="log" aria-label="Журнал поиска">—</pre></details></section>
+<details class="secondary" id="diagnostics"><summary>Диагностика и журнал</summary><div class="secondary-body"><p id="engine-state" class="micro">Нет данных об общем движке.</p><button id="restart-btn" data-write type="button">Перезапустить общий движок</button><p class="micro muted" style="margin-top:8px">Перезапуск mihomo прервёт соединения всех четырёх сервисов.</p><pre id="main-log" class="log" aria-label="Общий журнал">Ожидание журнала…</pre><details class="maintenance"><summary>Обслуживание аккаунта · опасные действия</summary><p class="micro muted">Общий аккаунт используется всеми сервисами. Ротация меняет ключи; новый аккаунт заменяет существующий.</p><div class="actions"><button id="rotate-btn" class="danger" data-write type="button">Ротация ключей</button><button id="newaccount-btn" class="danger" data-write type="button">Новый аккаунт</button></div></details></div></details>
+<details class="secondary" id="settings"><summary>Настройки</summary><div class="secondary-body"><form id="config-form"><div id="settings-fields" class="settings-fields"></div><div class="actions"><button id="save-config" class="primary" data-write type="submit">Сохранить настройки</button><button id="reset-config" type="button">Отменить правки</button><span id="config-state" class="micro" role="status">Нет изменений</span></div></form></div></details>
+<footer id="footer">warpd · данные ещё не получены</footer>
+</main>
 <script>
-"use strict";
+'use strict';
 const $ = id => document.getElementById(id);
+const names = ['warp','masque','masqueh2','m2w'];
+const labels = {warp:'WARP',masque:'MASQUE',masqueh2:'MASQUE H2',m2w:'MASQUE → WARP'};
+const descriptions = {warp:'WireGuard · UDP',masque:'CONNECT-IP · QUIC',masqueh2:'CONNECT-IP · HTTP/2',m2w:'WARP внутри MASQUE'};
 let secret = '';
-const params = new URLSearchParams(location.search);
-if (params.get('secret')) secret = params.get('secret');
-
-function api(path, method, body){
-  const opts = {method: method||'GET', headers: {'Content-Type':'application/json'}};
-  if (secret) opts.headers['Authorization'] = 'Bearer '+secret;
-  if (body) opts.body = JSON.stringify(body);
-  return fetch('/api/'+path, opts).then(r => r.json().catch(()=>({error:'bad response'})));
+const initialURL = new URL(location.href);
+if (initialURL.searchParams.has('secret')) {
+  secret = initialURL.searchParams.get('secret') || '';
+  initialURL.searchParams.delete('secret');
+  history.replaceState(null,'',initialURL.pathname+initialURL.search+initialURL.hash);
 }
-function toast(msg){
-  const t=$('toast'); t.textContent=msg; t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'), 2500);
+let lastStatus = null, receivedAt = 0, connected = false, needsAuth = false;
+let revision = 0, requestSequence = 0, renderedSequence = 0, busy = null, scanQueued = null;
+const rowErrors = new Map(), errorCheckTimes = new Map(), dirty = new Set();
+function rowError(name,text){rowErrors.set(name,text);errorCheckTimes.set(name,Date.parse(lastStatus.proxies[name].last_check)||0);}
+function element(tag,attrs={},text){const node=document.createElement(tag);for(const [k,v] of Object.entries(attrs))node.setAttribute(k,v);if(text!=null)node.textContent=text;return node;}
+function safe(value){let text=String(value==null?'':value);if(secret)text=text.split(secret).join('[скрыто]');return text.replace(/Bearer\s+[^\s]+/gi,'Bearer [скрыто]').replace(/([?&]secret=)[^\s&#]*/gi,'$1[скрыто]');}
+function put(id,text,kind){const node=$(id);node.textContent=safe(text);if(kind!=null)node.className=kind;}
+function message(text,kind=''){const node=$('message');node.textContent=safe(text);node.className='notice '+kind;node.hidden=!text;}
+function fmtTime(value){if(!value||String(value).startsWith('0001-'))return '—';const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString('ru-RU'): '—';}
+function fmtElapsed(seconds){const n=Math.max(0,Math.floor(seconds));return Math.floor(n/60)+' мин '+n%60+' с';}
+function fresh(){return connected&&!needsAuth&&receivedAt>0&&Date.now()-receivedAt<15000;}
+function invalidate(text){connected=false;put('connection',text,'bad');renderAll();}
+class APIError extends Error {constructor(text,status=0){super(text);this.status=status;}}
+async function api(path,method='GET',body){
+  const authAtRequest=secret;
+  const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),12000);
+  const options={method,headers:{'Content-Type':'application/json'},signal:controller.signal,cache:'no-store'};
+  if(secret)options.headers.Authorization='Bearer '+secret;
+  if(body!==undefined)options.body=JSON.stringify(body);
+  try {
+    const r=await fetch('/api/'+path,options);
+    if(r.status===401||r.status===403){if(authAtRequest===secret){needsAuth=true;$('auth').hidden=false;invalidate('Требуется токен');}throw new APIError('Нет доступа: проверьте токен API',r.status);}
+    let data;try{data=await r.json();}catch{throw new APIError('Сервер вернул некорректный ответ',r.status);}
+    if(!data||typeof data!=='object')throw new APIError('Неполный ответ сервера',r.status);
+    if(!r.ok||data.error)throw new APIError(safe(data.error||'HTTP '+r.status),r.status);
+    return data;
+  }catch(err){if(err instanceof APIError)throw err;throw new APIError(err.name==='AbortError'?'Сервер не ответил вовремя':'Нет связи с сервером');}
+  finally{clearTimeout(timer);}
 }
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function fmtTime(iso){ return iso ? iso.replace('T',' ').slice(5,16) : '—' }
-function fmtElapsed(sec){
-  if (sec < 0) sec = 0;
-  const m = Math.floor(sec/60), s = Math.floor(sec%60);
-  return m ? m+'м '+s+'с' : s+'с';
-}
-
-let lastStatus = null;
-
-function renderProxy(name, p){
-  const badge=$(name+'-badge');
-  if(!p.enabled){ badge.textContent='выкл'; badge.className='badge'; }
-  else if(p.ready){ badge.textContent='работает'; badge.className='badge on'; }
-  else if(p.transport_ready && !p.policy_ready){ badge.textContent='выход не подходит'; badge.className='badge warn'; }
-  else if(p.running){ badge.textContent='поднимается'; badge.className='badge warn'; }
-  else { badge.textContent='стоит'; badge.className='badge bad'; }
-
-  const listen = p.listen || '0.0.0.0';
-  const port = p.port;
-  const host = (listen==='0.0.0.0'||listen==='::') ? location.hostname : listen;
-  $(name+'-addr').textContent = (p.enabled && port) ? 'socks5h://'+host+':'+port : '—';
-
-  if(name==='warp'||name==='masque'||name==='masqueh2'){
-    const ep=$(name+'-ep'); ep.textContent = p.endpoint||'—';
-    ep.className='v'+(p.manual_endpoint?' warn':'');
-  } else {
-    const o=$(name+'-outer'), i=$(name+'-ep');
-    if (o) o.textContent = p.outer||'—';
-    if (i) i.textContent = p.endpoint||'—';
+function addFact(dl,key,label){dl.append(element('dt',{},label),element('dd',{id:key},'—'));}
+function buildRows(){
+  for(const name of names){
+    const row=element('section',{id:'row-'+name,class:'service','aria-label':labels[name]});
+    const main=element('div',{class:'service-main'}), identity=element('div',{class:'identity'});
+    identity.append(element('h3',{},labels[name]));
+    const health=element('div',{class:'health'});health.append(element('p',{id:name+'-transport'},'Сеть: нет данных'),element('p',{id:name+'-policy'},'Политика: не проверена'));
+    const control=element('div',{class:'control'}), toggle=element('button',{id:name+'-toggle',type:'button',role:'switch','aria-checked':'false','aria-label':labels[name]+': включить или выключить',class:'toggle','data-write':''});
+    toggle.append(element('span',{id:name+'-toggle-label',class:'toggle-label'},'—'),element('span',{class:'track','aria-hidden':'true'}));toggle.addEventListener('click',()=>toggleProxy(name));control.append(toggle);main.append(identity,health,control);
+    const details=element('details',{id:name+'-details'});details.append(element('summary',{},'Подключение и детали'));
+    const content=element('div',{class:'detail-content'}), dl=element('dl');
+    content.append(element('p',{class:'micro muted',style:'margin-bottom:12px'},descriptions[name]));
+    const address=element('dd',{class:'copy-line'});address.append(element('span',{id:name+'-addr',class:'mono'},'—'));
+    const copy=element('button',{id:name+'-copy',type:'button','aria-label':'Копировать SOCKS '+labels[name]},'Копировать');copy.addEventListener('click',()=>copyAddress(name));address.append(copy);dl.append(element('dt',{},'Адрес SOCKS'),address);
+    for(const [key,label] of [['desired','Настройка / применение'],['ep','Эндпоинт'],...(name==='m2w'?[['outer','Внешний MASQUE']]:[]),['mode','Выбор эндпоинта'],['colo','Наблюдаемый HTTP-colo'],['ip-country','Страна публичного IP · /meta'],['exit','Данные выхода'],['check','Последняя проверка'],['counts','Счётчики проверок'],['events','Восстановление'],['error','Ошибка сети'],['policy-error','Причина политики'],...(name==='m2w'?[['geo','Независимая IP-геопроверка'],['geo-error','Ошибка IP-геопроверки']]:[])])addFact(dl,name+'-'+key,label);
+    content.append(dl);
+    const form=element('form',{id:name+'-pinform',class:'pin-editor'}), fields=element('div',{class:'pin-fields'});
+    for(const [id,label] of name==='m2w'?[['m2w-outin','Внешний MASQUE · IP:порт'],['m2w-inin','Внутренний WARP · IP:порт']]:[[name+'-epin','Эндпоинт · IP:порт']]){
+      const field=element('div',{class:'field'});field.append(element('label',{for:id},label),element('input',{id,type:'text',required:'',spellcheck:'false',autocomplete:'off',placeholder:'IP:порт','data-endpoint':name}));fields.append(field);
+    }
+    const actions=element('div',{class:'actions'}), apply=element('button',{id:name+'-apply',type:'submit','data-write':''},'Закрепить для '+labels[name]), clear=element('button',{id:name+'-clearbtn',type:'button','data-write':''},'Вернуть автовыбор');
+    clear.addEventListener('click',()=>clearPin(name));
+    const scanButton=element('button',{id:name+'-scan',type:'button','data-write':''},'Найти эндпоинт');scanButton.addEventListener('click',()=>scan(name));actions.append(apply,clear,scanButton);form.append(fields,actions,element('p',{class:'micro muted',style:'margin-top:8px'},'Изменяется только эта строка. Применение общего конфига может затронуть активные соединения.'));
+    for(const input of form.querySelectorAll('input'))input.addEventListener('input',()=>input.dataset.dirty='true');
+    form.addEventListener('submit',event=>{event.preventDefault();if(form.reportValidity())setEndpoint(name);});content.append(form);
+    details.append(content);row.append(main,details,element('p',{id:name+'-feedback',class:'feedback bad',role:'status',hidden:''}));$('services').append(row);
   }
-  const exit=$(name+'-exit');
-  exit.textContent = (p.exit_info||'—')+(p.exit_node_country ? ' · colo '+p.exit_node_country : '');
-  exit.className='v'+(p.ready?' ok':(p.transport_ready && !p.policy_ready?' warn':' dim'));
-  // проверки: время · успешных из всего · серия неудач · ошибка
-  let chk = fmtTime(p.last_check)+' · успешных '+p.ok_checks+'/'+p.checks;
-  if (p.fail_streak) chk += ' · подряд неудач: '+p.fail_streak;
-  if (p.error) chk += ' · '+p.error.slice(0,90);
-  if (p.transport_ready && p.policy_error) chk += ' · '+p.policy_error;
-  if (name==='m2w' && p.geo_check) chk += ' · IP-гео: '+(p.geo_country || '?')+' ('+fmtTime(p.geo_check)+')';
-  if (name==='m2w' && p.geo_error) chk += ' · '+p.geo_error;
-  if (name==='m2w' && p.transport_ready && !p.foreign_ip_verified) chk += ' · иностранный IP не подтверждён';
-  const cel=$(name+'-check'); cel.textContent=chk;
-  cel.className='v'+(p.fail_streak || (p.transport_ready && !p.policy_ready)?' warn':' dim');
-  const clrBtn=$(name+'-clearbtn');
-  if (p.manual_endpoint){ clrBtn.classList.remove('hide'); } else { clrBtn.classList.add('hide'); }
 }
-
+function addressFor(p){if(!p||!p.port)return '';let host=p.listen||location.hostname;if(host==='0.0.0.0'||host==='::')host=location.hostname;if(host.includes(':')&&!host.startsWith('['))host='['+host+']';return 'socks5h://'+host+':'+p.port;}
+function proxyFresh(p){const checked=Date.parse(p.last_check);const age=Date.now()-checked;return fresh()&&Number.isFinite(checked)&&age>=-5000&&age<=((lastStatus.config.check_period||30)+40)*1000&&!p.checking;}
+function policyAllowed(name,p){const cfg=lastStatus.config||{};const excludedNodes=String(cfg.exclude_nodes||'').toUpperCase().split(/[\s,]+/);const excludedCountries=String(cfg.exclude_countries||'').toUpperCase().split(/[\s,]+/);return p.policy_ready===true&&!!p.exit_node_country&&p.exit_node_country.toUpperCase()!=='RU'&&!['DME','SVO'].includes(String(p.exit_node).toUpperCase())&&!excludedNodes.includes(String(p.exit_node).toUpperCase())&&!excludedCountries.includes(String(p.exit_node_country).toUpperCase())&&(name!=='m2w'||p.foreign_ip_verified===true);}
+function renderProxy(name,p={}){
+  if(rowErrors.has(name)&&proxyFresh(p)&&p.transport_ready&&Date.parse(p.last_check)>errorCheckTimes.get(name)){rowErrors.delete(name);errorCheckTimes.delete(name);}
+  const current=proxyFresh(p)&&!busy&&!rowErrors.has(name), transport=current&&p.enabled&&p.transport_ready===true, policy=transport&&policyAllowed(name,p);
+  const toggle=$(name+'-toggle');toggle.setAttribute('aria-checked',String(p.enabled===true));toggle.setAttribute('aria-busy',String(!!busy&&busy.name===name));
+  put(name+'-toggle-label',busy&&busy.name===name?'Применяем…':p.enabled?'Вкл':'Выкл');
+  let network='Сеть: нет данных',kind='muted';
+  if(!fresh())network='Сеть: статус недоступен';else if(busy)network='Сеть: изменение, ожидайте';else if(rowErrors.has(name)){network='Сеть: применение не подтверждено';kind='bad';}else if(!p.enabled)network='Сеть: выключено';else if(p.checking)network='Сеть: проверяется';else if(transport){network='Сеть: доступна';kind='ok';}else if(p.running){network='Сеть: нет свежей успешной проверки';kind='warn';}else{network='Сеть: не работает';kind='bad';}
+  put(name+'-transport',network,kind);
+  put(name+'-policy',!fresh()?'Политика: нет актуальных данных':!p.enabled?'Политика: не оценивается':policy?'Политика: подходит':transport?'Политика: выход не подходит':'Политика: готовность не подтверждена',policy?'ok':transport?'warn':'muted');
+  put(name+'-addr',addressFor(p)||'—');
+  put(name+'-desired',(p.enabled?'Включён':'Выключен')+' · настройка'+(typeof p.applied_enabled==='boolean'?' / в движке '+(p.applied_enabled?'включён':'выключен'):' / применение оценивается по проверке сети'));
+  put(name+'-ep',p.endpoint||'—');if(name==='m2w')put(name+'-outer',p.outer||'—');
+  put(name+'-mode',p.manual_endpoint?'Закреплён вручную':'Автоматически');
+  put(name+'-colo',(p.exit_node||'—')+' · страна '+(p.exit_node_country||'неизвестна')+' (не страна IP)');
+  put(name+'-ip-country',p.exit_country||'Неизвестна');put(name+'-exit',p.exit_info||'—');
+  put(name+'-check',fmtTime(p.last_check)+(p.checking?' · выполняется':current?' · актуальна':' · не подтверждает текущую готовность'));
+  put(name+'-counts','Успешных '+(p.ok_checks||0)+' / '+(p.checks||0)+' · неудач подряд '+(p.fail_streak||0));
+  put(name+'-events','Принятых ресканов '+(p.rescans||0)+' · перезапусков '+(p.restarts||0));
+  put(name+'-error',p.error||'—');put(name+'-policy-error',p.policy_error||(name==='m2w'&&!p.foreign_ip_verified?'Иностранный IP не подтверждён':policy?'Нет':'Готовность выхода не подтверждена'));
+  if(name==='m2w'){put(name+'-geo',(p.foreign_ip_verified?'Иностранный IP подтверждён':'Иностранный IP не подтверждён')+' · '+(p.geo_country||'страна неизвестна')+' · '+fmtTime(p.geo_check));put(name+'-geo-error',p.geo_error||'—');}
+  const feedback=$(name+'-feedback');feedback.textContent=safe(rowErrors.get(name)||'');feedback.hidden=!feedback.textContent;
+  for(const [id,value] of name==='m2w'?[['m2w-outin',p.outer],['m2w-inin',p.endpoint]]:[[name+'-epin',p.endpoint]]){const input=$(id);if(!input.dataset.dirty&&document.activeElement!==input)input.value=value||'';}
+  $(name+'-copy').disabled=!fresh()||!addressFor(p);
+}
+function renderAll(){if(lastStatus){for(const name of names)renderProxy(name,lastStatus.proxies[name]||{});renderScan(lastStatus.scan||{});renderConfig(lastStatus.config||{});}updateControls();}
+function scanActive(){return !!scanQueued||!!(lastStatus&&lastStatus.scan&&lastStatus.scan.scanning);}
+function canWrite(){return fresh()&&!busy&&!scanActive();}
+function updateControls(){
+  const allowed=canWrite(), why=!fresh()?'Недоступно без актуального статуса':busy?'Дождитесь завершения текущего запроса':scanActive()?'Идёт поиск: изменение общего конфига временно недоступно':'';
+  for(const button of document.querySelectorAll('[data-write]')){button.disabled=!allowed;button.title=why;}
+  if(allowed&&!dirty.size){$('save-config').disabled=true;$('save-config').title='Нет несохранённых изменений';}
+  $('reset-config').disabled=!dirty.size||!!busy;
+  for(const input of document.querySelectorAll('[data-endpoint]')){input.disabled=!allowed;input.title=why;}
+}
 function renderScan(sc){
-  const st=$('scan-state'), btn=$('scan-btn');
-  if (sc.scanning){
-    const started = sc.started ? new Date(sc.started) : null;
-    const el = started ? fmtElapsed((Date.now()-started.getTime())/1000) : '';
-    st.innerHTML = '<span class="spin"></span>идёт поиск ('+esc(sc.for||'')+
-      (sc.reason ? ', '+esc(sc.reason) : '')+')'+(el ? ' · '+el : '');
-    st.className='v warn';
-    btn.disabled = true; btn.textContent = 'поиск идёт…';
-  } else {
-    st.textContent = sc.last_scan ? 'последний: '+fmtTime(sc.last_scan) : '—';
-    st.className='v';
-    btn.disabled = false; btn.textContent = 'новый поиск (все)';
-  }
-  $('scan-result').textContent = sc.last_result||'—';
-  const logEl=$('scan-log');
-  const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 30;
-  logEl.textContent = (sc.log||[]).join('\n') || '—';
-  if (atBottom) logEl.scrollTop = 99999;
+  if(scanQueued&&(sc.scanning||(sc.last_scan&&sc.last_scan!==scanQueued.lastScan)))scanQueued=null;
+  if(scanQueued&&Date.now()-scanQueued.at>20000){scanQueued=null;message('Запрос поиска принят, но запуск не подтверждён за 20 секунд. Проверьте журнал.','warn');}
+  const active=!!sc.scanning||!!scanQueued;
+  $('scan-spinner').hidden=!active;
+  if(sc.scanning){const started=Date.parse(sc.started);put('scan-state','Идёт поиск · '+(labels[sc.for]||sc.for||'все')+(Number.isFinite(started)?' · '+fmtElapsed((Date.now()-started)/1000):' · время начала неизвестно')+(sc.reason?' · '+sc.reason:''));$('scan-details').open=true;}
+  else if(scanQueued){put('scan-state','Принят в очередь · '+fmtElapsed((Date.now()-scanQueued.at)/1000)+' · запуск ещё не подтверждён');$('scan-details').open=true;}
+  else put('scan-state',sc.last_scan&&!String(sc.last_scan).startsWith('0001-')?'Не выполняется · последний '+fmtTime(sc.last_scan):'Поиск не выполняется');
+  put('scan-result',sc.last_result?'Последний результат: '+sc.last_result:'');
+  const log=$('scan-log'), atBottom=log.scrollTop+log.clientHeight>=log.scrollHeight-30;
+  put('scan-log',Array.isArray(sc.log)&&sc.log.length?sc.log.join('\n'):'Журнал поиска пуст');if(atBottom)log.scrollTop=log.scrollHeight;
+  $('scan-btn').textContent=active?'Поиск: ожидайте…':'Найти для всех';
 }
-
-function renderConfig(c){
-  for (const k of ['check_period','dme_rescan_gap','fail_restart','fail_rescan','scan_sample','scan_jobs','max_ping']){
-    const el=$('cfg-'+k);
-    if (el && document.activeElement!==el && c[k]!=null) el.value=c[k];
-  }
-  for (const k of ['exclude_nodes','exclude_countries']){
-    const el=$('cfg-'+k);
-    if (el && document.activeElement!==el && c[k]!=null) el.value=c[k];
+const configFields=[
+  ['check_period','Период проверки выхода, секунд',10,86400],
+  ['dme_rescan_gap','Минимальный интервал рескана WARP, секунд',60,86400],
+  ['fail_restart','Перезапуск после неудач подряд',1,100],
+  ['fail_rescan','Рескан после неудач подряд',2,100],
+  ['scan_sample','Адресов на подсеть',1,50],
+  ['scan_jobs','Параллельных туннелей',1,32],
+  ['max_ping','Максимальный пинг, мс · 0 без лимита',0,5000],
+  ['autoscan_start','Автопоиск при запуске','boolean'],
+  ['exclude_nodes','Исключить HTTP-colo · коды через запятую','string'],
+  ['exclude_countries','Исключить страны colo · коды через запятую','string']
+];
+function configValue(key){const input=$('cfg-'+key);return input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;}
+function configDirty(){put('config-state',dirty.size?'Несохранённых полей: '+dirty.size:'Нет изменений');}
+function buildConfig(){
+  for(const [key,label,type,max] of configFields){
+    const field=element('div',{class:'field'+(type==='string'?' wide':'')+(type==='boolean'?' checkbox-field':'')});
+    const input=element('input',{id:'cfg-'+key,type:type==='boolean'?'checkbox':type==='string'?'text':'number','data-config':key});
+    if(typeof type==='number'){input.min=type;input.max=max;input.required=true;input.step='1';}
+    const labelNode=element('label',{for:input.id},label);
+    if(type==='boolean')field.append(input,labelNode);else field.append(labelNode,input);
+    for(const event of ['input','change'])input.addEventListener(event,()=>{dirty.add(key);configDirty();updateControls();});
+    $('settings-fields').append(field);
   }
 }
-
+function renderConfig(c){for(const [key] of configFields){const input=$('cfg-'+key);if(!dirty.has(key)&&c[key]!=null){if(input.type==='checkbox')input.checked=c[key]===true;else input.value=c[key];}}configDirty();}
+async function saveConfig(){
+  if(!canWrite()||!dirty.size||!$('config-form').reportValidity())return;
+  const patch=Object.fromEntries([...dirty].map(key=>[key,configValue(key)]));
+  const outcome=await mutate('config',patch,{accepted:'Настройки отправлены. Проверяется ответ сервера.'});
+  if(outcome&&outcome.status){for(const [key,value] of Object.entries(patch))if(outcome.status.config[key]===value&&configValue(key)===value)dirty.delete(key);
+    message(dirty.size?'Не все правки подтверждены сервером. Несохранённые значения оставлены в форме.':'Настройки сохранены и подтверждены сервером.',dirty.size?'warn':'');}
+  renderAll();
+}
 async function refresh(){
-  let st;
-  try { st = await api('status'); } catch(e){ return; }
-  if (st.error==='unauthorized'){
-    document.body.innerHTML='<div class="card">требуется токен: откройте страницу как /?secret=...</div>';
-    return;
-  }
-  lastStatus = st;
-  if (st.proxies){
-    for (const n of ['warp','masque','masqueh2','m2w']){
-      if (st.proxies[n]) renderProxy(n, st.proxies[n]);
-    }
-  }
-  renderScan(st.scan||{});
-  renderConfig(st.config||{});
-  const gd=$('gdot'), ps=Object.values(st.proxies||{});
-  if (ps.some(p=>p.ready)) gd.className='dot ok';
-  else if (ps.some(p=>p.running)) gd.className='dot warn';
-  else gd.className='dot bad';
-  $('footer').textContent = 'warpd · '+fmtTime(st.time)+
-    ' · WARP '+(st.proxies.warp?st.proxies.warp.port:'')+
-    ' / MASQUE '+(st.proxies.masque && st.proxies.masque.enabled ? st.proxies.masque.port : '—')+
-    ' / H2 '+(st.proxies.masqueh2 && st.proxies.masqueh2.enabled ? st.proxies.masqueh2.port : '—')+
-    ' / M2W '+(st.proxies.m2w && st.proxies.m2w.enabled ? st.proxies.m2w.port : '—')+
-    (st.mihomo && st.mihomo.pid ? ' · mihomo pid '+st.mihomo.pid : '');
+  const epoch=revision, seq=++requestSequence;
+  try{
+    const st=await api('status');
+    if(epoch!==revision||seq<renderedSequence)return null;
+    if(!st||!st.proxies||!st.config||!names.every(name=>st.proxies[name]&&typeof st.proxies[name].enabled==='boolean'))throw new APIError('Неполный статус сервера');
+    lastStatus=st;renderedSequence=seq;receivedAt=Date.now();connected=true;needsAuth=false;$('auth').hidden=true;
+    put('connection','Связь с сервером','muted');put('updated','Обновлено '+new Date(receivedAt).toLocaleTimeString('ru-RU'));
+    put('engine-state','Общий движок mihomo: '+(st.mihomo&&st.mihomo.running?'запущен':'остановлен')+' · PID '+(st.mihomo&&st.mihomo.pid||'—')+' · поколение '+(st.mihomo&&st.mihomo.generation||'—'));
+    put('footer','warpd'+(st.version?' · '+st.version:'')+' · время сервера '+fmtTime(st.time));renderAll();return st;
+  }catch(err){if(epoch===revision&&seq>=renderedSequence){invalidate(needsAuth?'Требуется токен':'Нет актуальной связи');message(err.message,'bad');}return null;}
 }
-
-async function refreshLog(){
-  let d;
-  try { d = await api('log'); } catch(e){ return; }
-  if (!d || !d.lines) return;
-  const el=$('main-log');
-  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
-  el.textContent = d.lines.join('\n') || '—';
-  if (atBottom) el.scrollTop = 99999;
+async function refreshLog(){try{const data=await api('log');if(Array.isArray(data.lines))put('main-log',data.lines.join('\n')||'Журнал пуст');}catch(err){if(needsAuth)message(err.message,'bad');else put('main-log','Журнал недоступен. '+err.message);}}
+async function toggleProxy(name){
+  if(!canWrite()||!lastStatus.proxies[name])return;
+  const enabled=!lastStatus.proxies[name].enabled;busy={name};revision++;rowErrors.delete(name);message('');renderAll();
+  let failure='';try{await api('proxy','POST',{proxy:name,enabled});}catch(err){failure=err.message;}
+  revision++;const st=await refresh();
+  if(!failure&&(!st||st.proxies[name].enabled!==enabled))failure='Изменение не подтверждено сервером. Проверьте настройку и состояние движка.';
+  if(failure){rowError(name,'Ошибка: '+failure);message('Не удалось подтвердить изменение '+labels[name]+'. '+failure,'bad');}
+  busy=null;renderAll();
 }
-
-refresh();
-refreshLog();
-setInterval(refresh, 5000);
-setInterval(refreshLog, 5000);
-
-function scan(for_){
-  api('scan','POST',{for:for_}).then(r=>{
-    toast(r.queued ? 'поиск запущен' : 'поиск уже идёт — статус выше');
-    refresh();
-  });
+async function mutate(path,body,{name=null,accepted='Запрос принят. Готовность обновляется по проверкам.'}={}){
+  if(!canWrite())return null;
+  busy={name,path};revision++;if(name)rowErrors.delete(name);message('Выполняется запрос…');renderAll();
+  let result=null, failure='';try{result=await api(path,'POST',body);}catch(err){failure=err.message;}
+  revision++;const status=await refresh();busy=null;
+  if(failure){if(name)rowError(name,'Ошибка: '+failure);message('Ошибка: '+failure,'bad');}
+  else if(!status)message('Запрос принят, но актуальный статус недоступен. Применение не подтверждено.','warn');
+  else message(accepted);
+  renderAll();return failure?null:{result,status};
 }
-function restart(p){ api('restart','POST',{proxy:p}).then(()=>{toast('перезапуск'); refresh();}); }
-function register(fresh){ api('register','POST',{fresh:fresh}).then(()=>{toast('register запущен — результат в журнале'); refreshLog();}); }
-function togglePin(name){
-  $(name+'-pinform').classList.toggle('hide');
-  const form = $(name+'-pinform');
-  if (!form.classList.contains('hide') && !$(name+'-epin') && name==='warp'){}
-  if (!form.classList.contains('hide') && $(name+'-epin') && !$(name+'-epin').value){
-    if (lastStatus && lastStatus.proxies[name]) $(name+'-epin').value = lastStatus.proxies[name].endpoint||'';
-  }
+function setEndpoint(name){
+  if(!names.includes(name))return;
+  const body=name==='m2w'?{proxy:name,outer:$('m2w-outin').value.trim(),inner:$('m2w-inin').value.trim()}:{proxy:name,endpoint:$(name+'-epin').value.trim()};
+  return mutate('endpoint',body,{name,accepted:'Запрос закрепления '+labels[name]+' принят. Эндпоинт и готовность — в деталях строки.'});
 }
-function setEndpoint(){
-  const warpEp=$('warp-epin') ? $('warp-epin').value.trim() : '';
-  if(!$('warp-pinform').classList.contains('hide') && warpEp){
-    api('endpoint','POST',{proxy:'warp',endpoint:warpEp}).then(()=>{toast('эндпоинт применён'); refresh();});
-  }
-  for (const n of ['masque','masqueh2']){
-    const inp=$(n+'-epin');
-    if(inp && !$(n+'-pinform').classList.contains('hide') && inp.value.trim()){
-      api('endpoint','POST',{proxy:n,endpoint:inp.value.trim()}).then(()=>{toast('эндпоинт применён'); refresh();});
-    }
-  }
-  {
-    const o=$('m2w-outin'), i=$('m2w-inin');
-    if(o && i && !$('m2w-pinform').classList.contains('hide') && o.value.trim() && i.value.trim()){
-      api('endpoint','POST',{proxy:'m2w',outer:o.value.trim(),inner:i.value.trim()}).then(()=>{toast('эндпоинты применены'); refresh();});
-    }
-  }
+function clearPin(name){return mutate('endpoint/clear',{proxy:name},{name,accepted:'Запрос автовыбора '+labels[name]+' принят. Проверьте режим и готовность в строке.'});}
+async function scan(target){
+  if(!canWrite())return;
+  const previous=lastStatus.scan&&lastStatus.scan.last_scan;
+  const outcome=await mutate('scan',{for:target},{accepted:''});
+  if(!outcome)return;
+  if(outcome.result.queued===true){if(!outcome.status||!outcome.status.scan.scanning)scanQueued={at:Date.now(),lastScan:previous,target};message('Запрос поиска принят в очередь. Окончание и результат — в статусе и журнале.');}
+  else message('Запрос поиска не принят. Возможны активный поиск, закреплённые эндпоинты или отсутствие доступных целей; проверьте статус и журнал.','warn');
+  renderAll();
 }
-function clearPin(name){ api('endpoint/clear','POST',{proxy:name}).then(()=>{toast('пин снят, авто-режим'); refresh();}); }
-function saveConfig(){
-  const patch={
-    check_period:+$('cfg-check_period').value,
-    dme_rescan_gap:+$('cfg-dme_rescan_gap').value,
-    fail_restart:+$('cfg-fail_restart').value,
-    fail_rescan:+$('cfg-fail_rescan').value,
-    scan_sample:+$('cfg-scan_sample').value,
-    scan_jobs:+$('cfg-scan_jobs').value,
-    max_ping:+$('cfg-max_ping').value,
-    exclude_nodes:$('cfg-exclude_nodes').value,
-    exclude_countries:$('cfg-exclude_countries').value
-  };
-  api('config','POST',patch).then(r=>{
-    if (r.error) toast('ошибка: '+r.error);
-    else { toast('сохранено'); refresh(); }
-  });
+async function restart(){
+  if(!canWrite()||!confirm('Перезапустить общий движок mihomo? Соединения всех четырёх сервисов будут прерваны.'))return;
+  await mutate('restart',{proxy:'all'},{accepted:'Запрос перезапуска общего движка принят. Завершение проверяйте по состоянию сети и журналу.'});refreshLog();
 }
+async function register(freshAccount){
+  if(!canWrite()||!confirm(freshAccount?'Создать новый общий аккаунт вместо текущего? Это изменит учётные данные всех сервисов.':'Обновить ключи общего аккаунта? Активные соединения всех сервисов могут прерваться.'))return;
+  await mutate('register',{fresh:freshAccount},{accepted:'Запрос обслуживания аккаунта принят. Это не подтверждение завершения; результат смотрите в журнале.'});refreshLog();
+}
+async function copyAddress(name){try{await navigator.clipboard.writeText(addressFor(lastStatus.proxies[name]));message('Адрес SOCKS скопирован');}catch{message('Не удалось скопировать. Выделите адрес вручную.','warn');}}
+buildRows();buildConfig();
+$('scan-btn').addEventListener('click',()=>scan('both'));
+$('restart-btn').addEventListener('click',restart);
+$('rotate-btn').addEventListener('click',()=>register(false));
+$('newaccount-btn').addEventListener('click',()=>register(true));
+$('config-form').addEventListener('submit',event=>{event.preventDefault();saveConfig();});
+$('reset-config').addEventListener('click',()=>{dirty.clear();if(lastStatus)renderConfig(lastStatus.config);updateControls();});
+$('auth-form').addEventListener('submit',async event=>{event.preventDefault();secret=$('token').value;$('token').value='';needsAuth=false;revision++;await refresh();if(connected){message('');put('auth-error','');refreshLog();}else put('auth-error','Не удалось подключиться. Проверьте токен и доступность сервера.');});
+renderAll();refresh();refreshLog();setInterval(refresh,5000);setInterval(refreshLog,5000);setInterval(()=>{if(receivedAt&&!fresh()){invalidate(needsAuth?'Требуется токен':'Данные устарели');}else if(lastStatus)renderAll();},1000);
 </script>
 </body>
 </html>

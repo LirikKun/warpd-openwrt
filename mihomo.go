@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -163,7 +166,7 @@ func mihomoConfText(g Settings, e endpoints, acc warpAccount) string {
 	}
 	m2wReady := false
 	if p := g.Proxies["m2w"]; p.Enabled {
-		mep := firstNonEmpty(p.Outer, e.masque["masque"], e.warp)
+		mep := firstNonEmpty(p.Outer, e.masque["masque"])
 		wep := firstNonEmpty(p.Inner, e.warp)
 		if mep != "" && wep != "" && mep != wep {
 			masq("M2W OUTER", mep, "")
@@ -240,6 +243,10 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 				m.stopLocked()
 				return fmt.Errorf("mihomo reload ownership check failed: %w", err)
 			}
+			if err := m.verifyRemovedListenersLocked(conf); err != nil {
+				m.stopLocked()
+				return err
+			}
 			m.lastConf = conf
 			m.lastAccount = acc
 			m.generation++
@@ -299,6 +306,86 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 	m.generation++
 	logg.Printf("mihomo started (pid %d)", m.pid)
 	return nil
+}
+
+// Reload success must also prove that removed listeners no longer belong to
+// our exact child. Never signal an unrelated process that reused a freed port.
+func (m *MihomoMan) verifyRemovedListenersLocked(conf string) error {
+	if m.ownership != nil {
+		return nil
+	} // explicit synthetic ownership fixture
+	old, _ := mihomoListeners(m.lastConf)
+	current, _ := mihomoListeners(conf)
+	// A retained port is not a retained binding: narrowing or moving its
+	// address must close any owned socket outside the new address coverage.
+	covered := func(binding mihomoListener) bool {
+		address := net.ParseIP(binding.address)
+		for _, listener := range current {
+			want := net.ParseIP(listener.address)
+			if listener.port != binding.port || address == nil || want == nil {
+				continue
+			}
+			if address.Equal(want) || want.IsUnspecified() && (want.To4() != nil) == (address.To4() != nil) {
+				return true
+			}
+		}
+		// /proc cannot prove IPv6 wildcard dual-stack coverage. In particular,
+		// changing address families must not certify a retained obsolete fd.
+		return false
+	}
+	removed := map[int]bool{}
+	for _, listener := range old {
+		if !covered(listener) {
+			removed[listener.port] = true
+		}
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	root := firstNonEmpty(m.procRoot, "/proc")
+	timeout := m.ownershipTimeout
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		sockets, err := readMihomoSockets(root)
+		if err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(filepath.Join(root, strconv.Itoa(m.pid), "fd"))
+		if err != nil {
+			return fmt.Errorf("cannot verify removed mihomo listeners")
+		}
+		owned := map[string]bool{}
+		for _, entry := range entries {
+			link, err := os.Readlink(filepath.Join(root, strconv.Itoa(m.pid), "fd", entry.Name()))
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("cannot verify removed mihomo listeners")
+			}
+			owned[link] = true
+		}
+		retained := false
+		for _, socket := range sockets {
+			if removed[socket.port] && owned["socket:["+socket.inode+"]"] && !covered(socket.mihomoListener) {
+				retained = true
+			}
+		}
+		if !retained {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("mihomo reload retained a disabled listener")
+		}
+		select {
+		case <-m.done:
+			return fmt.Errorf("mihomo exited during removal verification")
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
 }
 
 func (m *MihomoMan) waitOwnershipLocked(listeners []mihomoListener) error {

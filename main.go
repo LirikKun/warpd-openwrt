@@ -29,13 +29,7 @@ func main() {
 	// standalone proxy is pinned: an unpinned M2W dependency may still change.
 	// Ensure avoids a reload when the effective configuration is identical.
 	orch.onApply = func(name string) {
-		g := cfg.Snapshot()
-		acc, err := loadAccount(account)
-		if err != nil {
-			logg.Printf("[%s] account: %v", name, err)
-			return
-		}
-		if err := mihomo.Ensure(g, stateGetEndpoints(), acc); err != nil {
+		if err := orch.applyCurrent(); err != nil {
 			logg.Printf("[%s] mihomo: %v", name, err)
 		} else {
 			logg.Printf("[%s] mihomo config updated", name)
@@ -55,20 +49,7 @@ func main() {
 	if cfg.AutoscanStart {
 		go func() {
 			time.Sleep(2 * time.Second)
-			e := stateGetEndpoints()
-			g := cfg.Snapshot()
-			need := false
-			if g.Proxies["warp"].Enabled && e.warp == "" && g.Proxies["warp"].Endpoint == "" {
-				need = true
-			}
-			for _, k := range []string{"masque", "masqueh2"} {
-				if g.Proxies[k].Enabled && e.masque[k] == "" && g.Proxies[k].Endpoint == "" {
-					need = true
-				}
-			}
-			if need {
-				orch.ForceScan("both", "startup")
-			}
+			orch.queueMissing("startup")
 		}()
 	}
 
@@ -86,7 +67,7 @@ func main() {
 	}
 }
 
-const version = "2.0.2-policy"
+const version = "2.1.0"
 
 // pinned reports whether the proxy has a manual UCI pin that overrides scans.
 func pinned(p *ProxySettings, e endpoints, name string) bool {

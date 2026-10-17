@@ -19,8 +19,12 @@ import (
 // Scans are serialized (one warpscout scan at a time) to keep CPU/RAM
 // usage predictable on the Filogic 820.
 type Orchestrator struct {
-	onApply  func(name string)
-	settings *Settings
+	// Serialize desired-config mutations and every runtime apply. Snapshot
+	// current settings inside this lock, never before waiting for it.
+	applyMu       sync.Mutex
+	accountLoader func() (warpAccount, error)
+	onApply       func(name string)
+	settings      *Settings
 
 	mu sync.Mutex
 	// endpoints chosen by the last successful scan (persisted in RAM only;
@@ -93,6 +97,85 @@ func NewOrchestrator(s *Settings) *Orchestrator {
 	}
 }
 
+func (o *Orchestrator) applyCurrent() error {
+	o.applyMu.Lock()
+	defer o.applyMu.Unlock()
+	return o.applyLocked()
+}
+
+func (o *Orchestrator) restartCurrent() error {
+	o.applyMu.Lock()
+	defer o.applyMu.Unlock()
+	mihomo.Stop()
+	return o.applyLocked()
+}
+
+func (o *Orchestrator) applyLocked() error {
+	g := o.settings.Snapshot()
+	enabled := false
+	for _, p := range g.Proxies {
+		enabled = enabled || p.Enabled
+	}
+	if !enabled {
+		mihomo.Stop()
+		return nil
+	}
+	loader := o.accountLoader
+	if loader == nil {
+		loader = func() (warpAccount, error) { return loadAccount(account) }
+	}
+	acc, err := loader()
+	if err != nil {
+		return err
+	}
+	e := stateGetEndpoints()
+	// Supervision may discover missing dependencies only when autoscan is
+	// enabled. Explicit enable/scan requests schedule their own discovery.
+	if g.AutoscanStart {
+		o.queueMissing("missing endpoint")
+	}
+	if err := mihomo.Ensure(g, e, acc); err != nil {
+		return err
+	}
+	if _, ok := mihomo.AppliedSnapshot(g, e); !ok {
+		return fmt.Errorf("mihomo apply could not be verified")
+	}
+	for key, p := range g.Proxies {
+		if !p.Enabled {
+			continue
+		}
+		ep, outer := liveEndpoint(key, p, e)
+		if ep == "" || key == "m2w" && (outer == "" || outer == ep) {
+			return fmt.Errorf("pending: %s needs usable endpoints", key)
+		}
+	}
+	return nil
+}
+
+func missingScanTargets(g Settings, e endpoints) map[string]bool {
+	wanted := map[string]bool{}
+	for _, key := range []string{"warp", "masque", "masqueh2"} {
+		if p := g.Proxies[key]; p != nil && p.Enabled {
+			if ep, _ := liveEndpoint(key, p, e); ep == "" {
+				wanted[key] = true
+			}
+		}
+	}
+	if p := g.Proxies["m2w"]; p != nil && p.Enabled {
+		if p.Inner == "" && e.warp == "" {
+			wanted["warp"] = true
+		}
+		if p.Outer == "" && e.masque["masque"] == "" {
+			wanted["masque"] = true
+		}
+	}
+	return wanted
+}
+
+func (o *Orchestrator) queueMissing(reason string) bool {
+	return o.queueFilteredScan("both", reason, false, missingScanTargets(o.settings.Snapshot(), stateGetEndpoints()))
+}
+
 // requestScan queues a scan for a proxy (non-blocking).
 func (o *Orchestrator) requestScan(for_, reason string) bool {
 	return o.queueScan(for_, reason, false)
@@ -140,6 +223,10 @@ func scanTargets(g Settings, for_ string, force bool) []string {
 }
 
 func (o *Orchestrator) queueScan(for_, reason string, force bool) bool {
+	return o.queueFilteredScan(for_, reason, force, nil)
+}
+
+func (o *Orchestrator) queueFilteredScan(for_, reason string, force bool, only map[string]bool) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.scanning {
@@ -149,6 +236,15 @@ func (o *Orchestrator) queueScan(for_, reason string, force bool) bool {
 	// duplicate health checks cannot flood the queue before its consumer runs.
 	g := o.settings.Snapshot()
 	targets := scanTargets(g, for_, force)
+	if only != nil {
+		filtered := targets[:0]
+		for _, key := range targets {
+			if only[key] {
+				filtered = append(filtered, key)
+			}
+		}
+		targets = filtered
+	}
 	for _, key := range targets {
 		if o.reserved[key] {
 			return false
@@ -298,10 +394,26 @@ func (o *Orchestrator) runRequest(req scanRequest) {
 			delete(o.reserved, key)
 		}
 		o.mu.Unlock()
+		// An enable may have arrived while the scanner was busy. Retry only
+		// missing dependencies after reservations are released; cooldown still
+		// bounds a failed scan and the normal queue prevents duplicates.
+		if o.onApply != nil {
+			o.queueMissing("missing endpoint after scan")
+		}
 	}()
 
 	o.log("scan for %s (reason: %s)", req.for_, req.reason)
 	for _, key := range targets {
+		// A preceding dependency may take minutes. Revalidate the remaining
+		// work against current consumers/pins, not the request-time snapshot.
+		g = o.settings.Snapshot()
+		needed := false
+		for _, target := range scanTargets(g, req.for_, req.force) {
+			needed = needed || target == key
+		}
+		if !needed {
+			continue
+		}
 		if g.Proxies[key] == nil {
 			g.Proxies[key] = (&ProxySettings{}).defaults(key)
 		}
@@ -450,14 +562,39 @@ func (o *Orchestrator) scanWarp(g Settings) {
 			o.log("warp: only endpoints over %dms found (best %dms); keeping warpscout pick", g.MaxPing, bp)
 		}
 	}
-	stateMu.Lock()
-	stateEp.warp = best
-	stateMu.Unlock()
+	if !o.publishScanEndpoint("warp", best) {
+		return
+	}
 	o.mu.Lock()
 	o.lastResult = "warp: " + best
 	o.mu.Unlock()
 	o.log("warp best endpoint: %s", best)
 	o.applyLive("warp")
+}
+
+// Publish RAM endpoints under the same lock as config mutations and applies.
+// An obsolete scan cannot repopulate state after its last consumer is disabled.
+func (o *Orchestrator) publishScanEndpoint(key, best string) bool {
+	o.applyMu.Lock()
+	defer o.applyMu.Unlock()
+	needed := false
+	for _, target := range scanTargets(o.settings.Snapshot(), "both", true) {
+		needed = needed || target == key
+	}
+	if !needed {
+		return false
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if key == "warp" {
+		stateEp.warp = best
+	} else {
+		if stateEp.masque == nil {
+			stateEp.masque = map[string]string{}
+		}
+		stateEp.masque[key] = best
+	}
+	return true
 }
 
 // applyLive hot-switches the running proxy process to the freshly scanned
@@ -508,9 +645,9 @@ func (o *Orchestrator) scanMasque(g Settings, key string) {
 		o.log("%s: %s over max ping, using %s", key, best, alt)
 		best = alt
 	}
-	stateMu.Lock()
-	stateEp.masque[key] = best
-	stateMu.Unlock()
+	if !o.publishScanEndpoint(key, best) {
+		return
+	}
 	o.mu.Lock()
 	o.lastResult = key + ": " + best
 	o.mu.Unlock()

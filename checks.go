@@ -62,14 +62,11 @@ func runChecks(ctx context.Context, cfg *Settings, orch *Orchestrator) {
 			return
 		default:
 		}
+		if err := orch.applyCurrent(); err != nil {
+			logg.Printf("mihomo: %v", err)
+		}
 		g := cfg.Snapshot()
 		e := stateGetEndpoints()
-		acc, err := loadAccount(account)
-		if err == nil {
-			if err := mihomo.Ensure(g, e, acc); err != nil {
-				logg.Printf("mihomo: %v", err)
-			}
-		}
 		roundStarted := time.Now()
 		process := mihomo.Snapshot()
 		var served []string
@@ -83,7 +80,7 @@ func runChecks(ctx context.Context, cfg *Settings, orch *Orchestrator) {
 			ep, outer := liveEndpoint(name, p, e)
 			if ep == "" || (name == "m2w" && (outer == "" || outer == ep)) {
 				if g.AutoscanStart {
-					orch.requestScan(name, "missing endpoint")
+					orch.queueMissing("missing endpoint")
 				}
 				continue
 			}
@@ -102,16 +99,13 @@ func runChecks(ctx context.Context, cfg *Settings, orch *Orchestrator) {
 			healthRoundRestartDue(g, served, process.Generation, roundStarted, lastRestart, time.Now()) {
 			// One failed chain must never restart its healthy neighbours.
 			// Only a complete, current failed round permits bounded recovery.
-			if acc, err := loadAccount(account); err == nil {
-				lastRestart = time.Now()
-				logg.Printf("all served proxies failed -> restarting shared mihomo")
-				mihomo.Stop()
-				if err := mihomo.Ensure(cfg.Snapshot(), stateGetEndpoints(), acc); err != nil {
-					logg.Printf("mihomo recovery: %v", err)
-				}
-				for _, name := range served {
-					getCheck(name).set(func(st *ProxyState) { st.Restarts++ })
-				}
+			lastRestart = time.Now()
+			logg.Printf("all served proxies failed -> restarting shared mihomo")
+			if err := orch.restartCurrent(); err != nil {
+				logg.Printf("mihomo recovery: %v", err)
+			}
+			for _, name := range served {
+				getCheck(name).set(func(st *ProxyState) { st.Restarts++ })
 			}
 		}
 		sleepCtx2(ctx, time.Duration(g.CheckPeriod)*time.Second)
@@ -154,6 +148,10 @@ func checkProxyWith(ctx context.Context, g Settings, name string, orch *Orchestr
 	if ctx.Err() != nil {
 		return // shutdown is not a failed health check
 	}
+	// Exclude a concurrent desired-state mutation between identity validation
+	// and recording a health result (including bounded chain geo observation).
+	orch.applyMu.Lock()
+	defer orch.applyMu.Unlock()
 	current := orch.settings.Snapshot()
 	currentEndpoints := stateGetEndpoints()
 	after, applied := mihomo.AppliedSnapshot(current, currentEndpoints)

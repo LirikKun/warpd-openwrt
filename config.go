@@ -274,6 +274,7 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 		"dme_rescan_gap":    {uci: "warpd.global.dme_rescan_gap", kind: "int", min: 60, max: 86400},
 		"exclude_nodes":     {uci: "warpd.global.exclude_nodes", kind: "str"},
 		"exclude_countries": {uci: "warpd.global.exclude_countries", kind: "str"},
+		"warp_enabled":      {uci: "warpd.warp.enabled", kind: "bool"},
 		"warp_port":         {uci: "warpd.warp.port", kind: "int", min: 1024, max: 65535},
 		"warp_listen":       {uci: "warpd.warp.listen", kind: "str"},
 		"masque_enabled":    {uci: "warpd.masque.enabled", kind: "bool"},
@@ -286,6 +287,8 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 		"m2w_port":          {uci: "warpd.m2w.port", kind: "int", min: 1024, max: 65535},
 		"web_secret":        {uci: "warpd.global.web_secret", kind: "str"},
 	}
+	// Validate every field before the first UCI mutation.
+	values := make(map[string]string, len(patch))
 	for name, raw := range patch {
 		b, ok := bindings[name]
 		if !ok {
@@ -300,28 +303,38 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 			if n < b.min || n > b.max {
 				return nil, fmt.Errorf("%s: %d out of range [%d,%d]", name, n, b.min, b.max)
 			}
-			if err := uciSet(b.uci, fmt.Sprintf("%d", n)); err != nil {
-				return nil, err
-			}
+			values[name] = strconv.Itoa(n)
 		case "bool":
-			v, _ := raw.(bool)
+			v, ok := raw.(bool)
+			if !ok {
+				return nil, fmt.Errorf("%s: expected boolean", name)
+			}
 			strV := "0"
 			if v {
 				strV = "1"
 			}
-			if err := uciSet(b.uci, strV); err != nil {
-				return nil, err
-			}
+			values[name] = strV
 		default:
 			str, ok := raw.(string)
 			if !ok {
 				return nil, fmt.Errorf("%s: expected string", name)
 			}
-			if err := uciSet(b.uci, str); err != nil {
-				return nil, err
-			}
+			values[name] = str
+		}
+	}
+	for name, value := range values {
+		if err := uciSet(bindings[name].uci, value); err != nil {
+			return applied, err
 		}
 		applied = append(applied, name)
+	}
+	// Read back exactly the requested keys before advancing live desired state.
+	// A command's zero exit status is not proof that UCI retained the value.
+	for name, value := range values {
+		out, readErr := exec.Command("uci", "-q", "get", bindings[name].uci).Output()
+		if readErr != nil || strings.TrimSuffix(string(out), "\n") != value {
+			return applied, fmt.Errorf("%s: persisted value could not be verified", name)
+		}
 	}
 	// reload live values
 	fresh := LoadSettings()
