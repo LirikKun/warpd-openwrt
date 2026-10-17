@@ -40,6 +40,10 @@ type MihomoMan struct {
 	configPath string
 	command    func(string) *exec.Cmd
 	reload     func() error
+	procRoot   string
+	// Explicit test seam. Injecting command/reload alone NEVER bypasses ownership.
+	ownership        func(int, []mihomoListener) error
+	ownershipTimeout time.Duration
 }
 
 // MihomoStatus is one consistent view of the child and its applied config.
@@ -66,7 +70,12 @@ func (m *MihomoMan) AppliedSnapshot(g Settings, e endpoints) (MihomoStatus, bool
 	defer m.mu.Unlock()
 	m.refreshExitedLocked()
 	status := MihomoStatus{PID: m.pid, Running: m.running, Generation: m.generation}
-	return status, m.running && m.lastConf != "" && m.desiredConf == m.lastConf && mihomoConfText(g, e, m.lastAccount) == m.lastConf
+	applied := m.running && m.lastConf != "" && m.desiredConf == m.lastConf && mihomoConfText(g, e, m.lastAccount) == m.lastConf
+	if applied {
+		listeners, err := mihomoListeners(m.lastConf)
+		applied = err == nil && m.checkOwnership(m.pid, listeners) == nil
+	}
+	return status, applied
 }
 
 // Reconcile the short interval between reaping and the waiter's mutex lock.
@@ -191,20 +200,46 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 	m.refreshExitedLocked()
 	conf := mihomoConfText(g, e, acc)
 	m.desiredConf = conf
+	if m.running {
+		listeners, err := mihomoListeners(m.lastConf)
+		if err == nil {
+			err = m.checkOwnership(m.pid, listeners)
+		}
+		if err != nil {
+			m.stopLocked() // only our exact child; never the foreign socket owner
+			return fmt.Errorf("mihomo managed listener ownership lost: %w", err)
+		}
+	}
 	if m.running && conf == m.lastConf {
 		return nil
 	}
 	configPath := firstNonEmpty(m.configPath, mihomoConf)
+	listeners, err := mihomoListeners(conf)
+	if err != nil {
+		return err
+	}
+	if err := m.checkCollisions(m.pid, listeners); err != nil {
+		return err
+	}
 	if err := os.WriteFile(configPath, []byte(conf), 0600); err != nil {
 		return err
 	}
 	if m.running {
 		// try hot reload via external-controller
+		// Recheck at the request boundary, after the config write/preflight.
+		if err := m.checkOwnership(m.pid, listeners[:1]); err != nil {
+			m.stopLocked()
+			return fmt.Errorf("mihomo controller ownership lost before reload: %w", err)
+		}
 		reload := m.reload
 		if reload == nil {
 			reload = mihomoReload
 		}
 		if err := reload(); err == nil {
+			if err := m.waitOwnershipLocked(listeners); err != nil {
+				m.stopLocked()
+				return fmt.Errorf("mihomo reload ownership check failed: %w", err)
+			}
 			m.lastConf = conf
 			m.lastAccount = acc
 			m.generation++
@@ -214,6 +249,9 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 			logg.Printf("mihomo reload failed (%v), restarting process", err)
 		}
 		m.stopLocked()
+	}
+	if err := m.checkCollisions(0, listeners); err != nil {
+		return err
 	}
 	var cmd *exec.Cmd
 	if m.command != nil {
@@ -225,16 +263,13 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 		cmd.Env = os.Environ()
 	}
 	cmd.Env = append(cmd.Env, "GOMEMLIMIT=40MiB")
+	protectMihomoChild(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	m.cmd = cmd
 	m.pid = cmd.Process.Pid
-	m.running = true
 	m.started = time.Now()
-	m.lastConf = conf
-	m.lastAccount = acc
-	m.generation++
 	done := make(chan struct{})
 	m.done = done
 	go func() {
@@ -253,8 +288,44 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 			m.started = time.Time{}
 		}
 	}()
+	err = m.waitOwnershipLocked(listeners)
+	if err != nil {
+		m.stopLocked()
+		return fmt.Errorf("mihomo startup ownership check failed: %w", err)
+	}
+	m.running = true
+	m.lastConf = conf
+	m.lastAccount = acc
+	m.generation++
 	logg.Printf("mihomo started (pid %d)", m.pid)
 	return nil
+}
+
+func (m *MihomoMan) waitOwnershipLocked(listeners []mihomoListener) error {
+	timeout := m.ownershipTimeout
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		err := m.checkOwnership(m.pid, listeners)
+		if err == nil {
+			select {
+			case <-m.done:
+				return fmt.Errorf("mihomo exited before listener ownership was established")
+			default:
+				return nil
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return err
+		}
+		select {
+		case <-m.done:
+			return fmt.Errorf("mihomo exited before listener ownership was established")
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
 }
 
 func (m *MihomoMan) stopLocked() {

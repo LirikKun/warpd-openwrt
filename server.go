@@ -56,6 +56,7 @@ func (srv *Server) refreshProxyPin(name string) {
 		p.Inner = fresh.Inner
 	}
 	mu.Unlock()
+	getCheck("m2w").clearGeo()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -71,6 +72,13 @@ func (srv *Server) status() map[string]any {
 	proxies := map[string]ProxyState{}
 	for _, name := range proxyNames {
 		p := g.Proxies[name]
+		if name == "m2w" {
+			ep, outer := liveEndpoint(name, p, e)
+			c := getCheck(name)
+			if !applied || !p.Enabled || c.snapshot().geoKey != geoKeyFor(g, process.Generation, ep, outer, p) {
+				c.clearGeo()
+			}
+		}
 		st := getCheck(name).snapshot()
 		st.Name = name
 		st.Enabled = p.Enabled
@@ -81,11 +89,19 @@ func (srv *Server) status() map[string]any {
 		checked, checkErr := time.Parse(time.RFC3339, st.LastCheck)
 		age := time.Since(checked)
 		fresh := checkErr == nil && age >= 0 && age <= time.Duration(g.CheckPeriod)*time.Second+40*time.Second
-		st.Ready = applied && st.Running && p.Enabled && st.Endpoint != "" &&
+		st.TransportReady = applied && st.Running && p.Enabled && st.Endpoint != "" &&
 			(name != "m2w" || st.Outer != "" && st.Outer != st.Endpoint) &&
 			st.FailStreak == 0 && st.Error == "" && st.OKChecks > 0 && fresh && !st.Checking &&
 			st.CheckedGeneration == process.Generation && st.CheckedEndpoint == st.Endpoint &&
 			st.CheckedOuter == st.Outer && st.CheckedPort == p.Port && st.CheckedListen == p.Listen
+		st.ForeignIPVerified = name == "m2w" && st.TransportReady &&
+			geoVerified(g, st, geoKeyFor(g, process.Generation, st.Endpoint, st.Outer, p), time.Now())
+		st.PolicyError = ""
+		if st.TransportReady {
+			st.PolicyError = exitPolicyError(g, name, st.ExitNode, st.ExitNodeCountry, st.ExitCountry, st.ForeignIPVerified)
+		}
+		st.PolicyReady = st.TransportReady && st.PolicyError == ""
+		st.Ready = st.TransportReady && st.PolicyReady
 		if name == "m2w" {
 			st.ManualEP = p.Outer != "" || p.Inner != ""
 		} else {
@@ -314,6 +330,7 @@ func (srv *Server) handler() http.Handler {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
+		getCheck("m2w").clearGeo()
 		writeJSON(w, 200, map[string]any{"applied": applied})
 	})
 

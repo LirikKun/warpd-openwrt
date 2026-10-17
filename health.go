@@ -223,7 +223,7 @@ func readMetaResponse(br *bufio.Reader) (exitParse, error) {
 	if m.Colo.IATA != "" {
 		info = fmt.Sprintf("%s via %s (%s node)", m.Country, m.Colo.City, m.Colo.IATA)
 	}
-	return exitParse{info: info, node: m.Colo.IATA, country: m.Country}, nil
+	return exitParse{info: info, node: m.Colo.IATA, country: m.Country, nodeCountry: m.Colo.CCA2}, nil
 }
 
 func ioReadFull(c net.Conn, buf []byte) (int, error) {

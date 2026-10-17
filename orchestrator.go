@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -196,7 +196,7 @@ func (o *Orchestrator) RegisterAccount(fresh bool) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, warpScout, args...)
 	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(), "GOMEMLIMIT=32MiB", "NO_COLOR=1", "TERM=dumb")
+	cmd.Env = append(scannerEnv(cmd.Environ()), "GOMEMLIMIT=32MiB", "NO_COLOR=1", "TERM=dumb")
 	out, err := cmd.CombinedOutput()
 	msg := strings.TrimSpace(string(out))
 	if err != nil {
@@ -317,29 +317,29 @@ func (o *Orchestrator) runRequest(req scanRequest) {
 	}
 }
 
-// excludeArgs turns "DME,SVO" / "RU,KZ" into warpscout -exclude-* flags.
-// The hard-coded DME (warp) default stays: user filters only add to it
-// add to them.
+// excludeArgs keeps WARP defaults additive. warpscout string flags are
+// last-value-wins, so each exclusion list must be passed exactly once.
+// Country filters refer to the node's country, not the public egress IP.
 func excludeArgs(nodes, countries string) []string {
-	var out []string
-	for _, n := range strings.Split(nodes, ",") {
-		n = strings.ToUpper(strings.TrimSpace(n))
-		if n != "" {
-			out = append(out, "-exclude-node", n)
+	merge := func(builtin, user string) string {
+		seen := make(map[string]bool)
+		var values []string
+		for _, value := range strings.Split(builtin+","+user, ",") {
+			value = strings.ToUpper(strings.TrimSpace(value))
+			if value != "" && !seen[value] {
+				seen[value] = true
+				values = append(values, value)
+			}
 		}
+		return strings.Join(values, ",")
 	}
-	for _, c := range strings.Split(countries, ",") {
-		c = strings.ToUpper(strings.TrimSpace(c))
-		if c != "" {
-			out = append(out, "-exclude-country", c)
-		}
-	}
-	return out
+	return []string{"-exclude-node", merge("DME", nodes), "-exclude-country", merge("RU", countries)}
 }
 
-// bestUnderPing re-reads the warpscout report and returns the best endpoint
-// whose ENDPOINT PING column is <= maxPing. Empty string = keep warpscout's
-// own -best pick (or no report).
+// bestUnderPing filters the first (working) table in warpscout v0.16.0's
+// -P report, preserving its loss/tunnel-RTT ranking. It never considers the
+// later torn-down table or per-node summary. Empty means keep -best: maxPing
+// remains a soft preference, not a hard liveness/policy fallback.
 func bestUnderPing(report string, maxPing int) string {
 	if maxPing <= 0 || report == "" {
 		return ""
@@ -348,16 +348,42 @@ func bestUnderPing(report string, maxPing int) string {
 	if err != nil {
 		return ""
 	}
+	inWorking := false
 	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			if inWorking || strings.Contains(line, " torn down (") || strings.HasPrefix(line, "# Best endpoint per node (") {
+				break
+			}
+			continue
+		}
 		f := strings.Fields(line)
-		// row shape: ENDPOINT PING TUN PING LOSS SEEN AS NODE ...
-		if len(f) >= 3 && strings.Contains(f[0], ":") {
-			ping := strings.TrimSuffix(f[1], "ms")
-			n, err := strconv.Atoi(ping)
-			if err == nil && n > 0 && n <= maxPing {
-				return f[0]
+		if strings.Join(f, " ") == "ENDPOINT ENDPOINT PING TUN PING LOSS SEEN AS NODE NODE LOCATION" {
+			inWorking = true
+			continue
+		}
+		// -P rows: IP:port, endpoint RTT, tunnel RTT, loss, seen-as,
+		// node, location. Seen-as can include an emoji; location has spaces.
+		if !inWorking || len(f) < 7 || !isEndpointLine(f[0]) {
+			continue
+		}
+		ping, err := time.ParseDuration(f[1])
+		if err != nil || !strings.HasSuffix(f[1], "ms") || ping <= 0 || ping > time.Duration(maxPing)*time.Millisecond {
+			continue
+		}
+		if f[2] != "?" {
+			tunPing, err := time.ParseDuration(f[2])
+			if err != nil || !strings.HasSuffix(f[2], "ms") || tunPing <= 0 {
+				continue
 			}
 		}
+		if f[3] != "-" {
+			loss, err := strconv.ParseFloat(strings.TrimSuffix(f[3], "%"), 64)
+			if err != nil || !strings.HasSuffix(f[3], "%") || !(loss >= 0 && loss <= 100) {
+				continue
+			}
+		}
+		return f[0]
 	}
 	return ""
 }
@@ -381,15 +407,23 @@ func reportPing(report, endpoint string) int {
 	return -1
 }
 
-// scanWarp: exclude DME, best by ping. Args copied from the live test.
+// scanWarp excludes DME/RU nodes and preserves scanner ranking, with a
+// soft preference for working endpoints under the host-ping limit.
 func (o *Orchestrator) scanWarp(g Settings) {
-	report := "/tmp/warpd-scan-warp.report.txt"
+	report := filepath.Join(os.TempDir(), "warpd-scan-warp.report.txt")
+	defer os.Remove(report)
+	if err := os.Remove(report); err != nil && !os.IsNotExist(err) {
+		o.log("warp scan report cleanup failed: %v", err)
+		o.mu.Lock()
+		o.lastResult = "warp: no endpoint"
+		o.mu.Unlock()
+		return
+	}
 	args := []string{
 		"scan",
 		"-a", account,
 		"-p", g.Proxies["warp"].Protocol,
 		"-P",
-		"-exclude-node", "DME",
 		"-n", fmt.Sprintf("%d", g.ScanSample),
 		"-jt", fmt.Sprintf("%d", g.ScanJobs),
 		"-best",
@@ -423,7 +457,6 @@ func (o *Orchestrator) scanWarp(g Settings) {
 	o.lastResult = "warp: " + best
 	o.mu.Unlock()
 	o.log("warp best endpoint: %s", best)
-	os.Remove(report)
 	o.applyLive("warp")
 }
 
@@ -441,7 +474,15 @@ func (o *Orchestrator) applyLive(name string) {
 // QUIC (fixed pool of 2 addresses x 7 ports).
 func (o *Orchestrator) scanMasque(g Settings, key string) {
 	p := g.Proxies[key]
-	report := "/tmp/warpd-scan-" + key + ".report.txt"
+	report := filepath.Join(os.TempDir(), "warpd-scan-"+key+".report.txt")
+	defer os.Remove(report)
+	if err := os.Remove(report); err != nil && !os.IsNotExist(err) {
+		o.log("%s scan report cleanup failed: %v", key, err)
+		o.mu.Lock()
+		o.lastResult = key + ": no endpoint"
+		o.mu.Unlock()
+		return
+	}
 	args := []string{
 		"scan",
 		"-a", account,
@@ -474,8 +515,23 @@ func (o *Orchestrator) scanMasque(g Settings, key string) {
 	o.lastResult = key + ": " + best
 	o.mu.Unlock()
 	o.log("%s best endpoint: %s", key, best)
-	os.Remove(report)
 	o.applyLive(key)
+}
+
+// scannerEnv prevents explicit environment proxies from changing the path
+// attributed to a scanned candidate (notably MASQUE H2 ProxyFromEnvironment).
+// It does not bypass transparent interception or host routing policy.
+func scannerEnv(base []string) []string {
+	env := make([]string, 0, len(base)+2)
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy":
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, "NO_PROXY=*", "no_proxy=*")
 }
 
 // runWarpScout executes a scan command, streaming plain output into the
@@ -493,7 +549,7 @@ func (o *Orchestrator) runWarpScout(args []string, maxWait time.Duration) (strin
 		cmd = exec.CommandContext(ctx, warpScout, args...)
 		cmd.Dir = workDir
 	}
-	cmd.Env = append(cmd.Environ(),
+	cmd.Env = append(scannerEnv(cmd.Environ()),
 		"GOMEMLIMIT=48MiB",
 		"NO_COLOR=1",
 		"TERM=dumb",
@@ -572,20 +628,11 @@ func lastNonEmpty(s string) string {
 	return ""
 }
 
-// isEndpointLine: "host:port" and nothing else (no spaces inside).
+// isEndpointLine accepts only scanner IP:port output (brackets for IPv6),
+// with a usable port. Hostnames and scoped addresses are not scanner output.
 func isEndpointLine(l string) bool {
-	if l == "" || strings.ContainsAny(l, " 	") {
-		return false
-	}
-	i := strings.LastIndex(l, ":")
-	if i <= 0 {
-		return false
-	}
-	port := l[i+1:]
-	if _, err := strconv.Atoi(port); err != nil {
-		return false
-	}
-	return net.ParseIP(l[:i]) != nil || strings.Contains(l[:i], ":")
+	endpoint, err := netip.ParseAddrPort(l)
+	return err == nil && endpoint.Port() > 0 && endpoint.Addr().Zone() == ""
 }
 
 // ScanStatusOK reports whether a scan is currently running.

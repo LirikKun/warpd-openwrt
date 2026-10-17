@@ -24,7 +24,7 @@ func TestProbeMarksPendingAndRecordsIdentity(t *testing.T) {
 		if !st.Checking || st.Ready {
 			t.Error("in-flight probe is not marked checking or still reports ready")
 		}
-		return exitParse{info: "US via fixture (TEST node)", node: "TEST", country: "US"}, nil
+		return exitParse{info: "US via fixture (TEST node)", node: "TEST", country: "US", nodeCountry: "US"}, nil
 	})
 	st := NewServer(s, o).status()["proxies"].(map[string]ProxyState)["warp"]
 	if st.Checking || !st.Ready || st.Checks != 2 || st.OKChecks != 2 {
@@ -40,7 +40,7 @@ func TestProbeDiscardsPreviousGenerationResult(t *testing.T) {
 		mihomo.mu.Lock()
 		mihomo.generation++
 		mihomo.mu.Unlock()
-		return exitParse{info: "US via fixture", node: "TEST", country: "US"}, nil
+		return exitParse{info: "US via fixture", node: "TEST", country: "US", nodeCountry: "US"}, nil
 	})
 	st := getCheck("warp").snapshot()
 	if st.Checks != 0 || st.OKChecks != 0 || st.Checking {
@@ -54,7 +54,7 @@ func TestProbeDiscardsChangedEndpointResult(t *testing.T) {
 	o := NewOrchestrator(s)
 	checkProxyWith(context.Background(), s.Snapshot(), "warp", o, func(ctx context.Context, listen string, port int) (exitParse, error) {
 		stateSetEndpoints(endpoints{warp: "192.0.2.9:2408", masque: map[string]string{}})
-		return exitParse{info: "US via fixture", node: "TEST", country: "US"}, nil
+		return exitParse{info: "US via fixture", node: "TEST", country: "US", nodeCountry: "US"}, nil
 	})
 	if st := getCheck("warp").snapshot(); st.Checks != 0 {
 		t.Fatalf("probe of previous endpoint was accepted: %+v", st)

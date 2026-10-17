@@ -105,6 +105,7 @@ func TestStatusValidatesProbeIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			st.LastCheck = time.Now().Format(time.RFC3339)
+			st.ExitNode, st.ExitNodeCountry, st.ExitCountry = "FRA", "DE", "RU"
 			getCheck("warp").set(func(out *ProxyState) { *out = st })
 			s := statusTestSettings()
 			got := NewServer(s, NewOrchestrator(s)).status()["proxies"].(map[string]ProxyState)["warp"]

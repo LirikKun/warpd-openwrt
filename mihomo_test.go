@@ -41,7 +41,7 @@ func newTestMihomo(t *testing.T) (*MihomoMan, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	ready := filepath.Join(dir, "ready")
-	m := &MihomoMan{configPath: filepath.Join(dir, "mihomo.yaml")}
+	m := &MihomoMan{configPath: filepath.Join(dir, "mihomo.yaml"), ownership: func(int, []mihomoListener) error { return nil }}
 	m.command = func(path string) *exec.Cmd {
 		if path != m.configPath {
 			t.Errorf("command config path = %q, want %q", path, m.configPath)

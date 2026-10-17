@@ -212,6 +212,7 @@ function renderProxy(name, p){
   const badge=$(name+'-badge');
   if(!p.enabled){ badge.textContent='выкл'; badge.className='badge'; }
   else if(p.ready){ badge.textContent='работает'; badge.className='badge on'; }
+  else if(p.transport_ready && !p.policy_ready){ badge.textContent='выход не подходит'; badge.className='badge warn'; }
   else if(p.running){ badge.textContent='поднимается'; badge.className='badge warn'; }
   else { badge.textContent='стоит'; badge.className='badge bad'; }
 
@@ -229,14 +230,18 @@ function renderProxy(name, p){
     if (i) i.textContent = p.endpoint||'—';
   }
   const exit=$(name+'-exit');
-  exit.textContent = p.exit_info||'—';
-  exit.className='v'+(p.exit_node==='DME'?' bad':(p.exit_info?' ok':''));
+  exit.textContent = (p.exit_info||'—')+(p.exit_node_country ? ' · colo '+p.exit_node_country : '');
+  exit.className='v'+(p.ready?' ok':(p.transport_ready && !p.policy_ready?' warn':' dim'));
   // проверки: время · успешных из всего · серия неудач · ошибка
   let chk = fmtTime(p.last_check)+' · успешных '+p.ok_checks+'/'+p.checks;
   if (p.fail_streak) chk += ' · подряд неудач: '+p.fail_streak;
   if (p.error) chk += ' · '+p.error.slice(0,90);
+  if (p.transport_ready && p.policy_error) chk += ' · '+p.policy_error;
+  if (name==='m2w' && p.geo_check) chk += ' · IP-гео: '+(p.geo_country || '?')+' ('+fmtTime(p.geo_check)+')';
+  if (name==='m2w' && p.geo_error) chk += ' · '+p.geo_error;
+  if (name==='m2w' && p.transport_ready && !p.foreign_ip_verified) chk += ' · иностранный IP не подтверждён';
   const cel=$(name+'-check'); cel.textContent=chk;
-  cel.className='v'+(p.fail_streak?' warn':' dim');
+  cel.className='v'+(p.fail_streak || (p.transport_ready && !p.policy_ready)?' warn':' dim');
   const clrBtn=$(name+'-clearbtn');
   if (p.manual_endpoint){ clrBtn.classList.remove('hide'); } else { clrBtn.classList.add('hide'); }
 }

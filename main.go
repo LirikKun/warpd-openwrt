@@ -86,7 +86,7 @@ func main() {
 	}
 }
 
-const version = "2.0.1-stability"
+const version = "2.0.2-policy"
 
 // pinned reports whether the proxy has a manual UCI pin that overrides scans.
 func pinned(p *ProxySettings, e endpoints, name string) bool {

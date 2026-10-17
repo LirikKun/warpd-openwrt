@@ -21,11 +21,14 @@ func statusTestSettings() *Settings {
 func isolateStatusState(t *testing.T) {
 	t.Helper()
 	oldM := mihomo
-	mihomo = &MihomoMan{running: true, pid: 12345}
+	// Synthetic managed-child seam: these tests exercise probe/status logic,
+	// not Linux ownership (covered by mihomo_ownership*_test.go).
+	mihomo = &MihomoMan{running: true, pid: 12345, ownership: func(int, []mihomoListener) error { return nil }}
 	checksMu.Lock()
 	oldChecks := checks
 	checks = map[string]*ProxyCheck{}
 	checksMu.Unlock()
+	getCheck("m2w").geoProbe = offlineGeo
 	oldEp := stateGetEndpoints()
 	stateSetEndpoints(endpoints{warp: "192.0.2.1:2408", masque: map[string]string{}})
 	mihomo.lastConf = mihomoConfText(statusTestSettings().Snapshot(), stateGetEndpoints(), warpAccount{})

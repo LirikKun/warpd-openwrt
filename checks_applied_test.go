@@ -22,7 +22,7 @@ func TestChecksRejectPendingCredentials(t *testing.T) {
 	}
 	ready()
 	probe := func(context.Context, string, int) (exitParse, error) {
-		return exitParse{node: "AMS", country: "US"}, nil
+		return exitParse{node: "AMS", country: "US", nodeCountry: "NL"}, nil
 	}
 	checkProxyWith(context.Background(), g, "warp", o, probe)
 	if !NewServer(s, o).status()["proxies"].(map[string]ProxyState)["warp"].Ready {
@@ -77,7 +77,7 @@ func TestProbeDiscardsUnappliedSiblingConfig(t *testing.T) {
 		mu.Lock()
 		s.Proxies["masque"].Port++
 		mu.Unlock()
-		return exitParse{node: "AMS", country: "US"}, nil
+		return exitParse{node: "AMS", country: "US", nodeCountry: "NL"}, nil
 	})
 	if st := getCheck("warp").snapshot(); st.Checks != 0 || st.Checking {
 		t.Fatalf("probe recorded while full config became unapplied: %+v", st)
@@ -103,10 +103,11 @@ func TestAppliedConfigIgnoresUnusedScannedEndpoints(t *testing.T) {
 	stateSetEndpoints(e)
 	for _, name := range []string{"warp", "m2w"} {
 		checkProxyWith(context.Background(), s.Snapshot(), name, NewOrchestrator(s), func(context.Context, string, int) (exitParse, error) {
-			return exitParse{node: "AMS", country: "US"}, nil
+			return exitParse{node: "AMS", country: "US", nodeCountry: "NL"}, nil
 		})
-		if !NewServer(s, NewOrchestrator(s)).status()["proxies"].(map[string]ProxyState)[name].Ready {
-			t.Fatalf("unused auto endpoints invalidated pinned %s", name)
+		st := NewServer(s, NewOrchestrator(s)).status()["proxies"].(map[string]ProxyState)[name]
+		if !st.TransportReady || st.Ready != (name != "m2w") {
+			t.Fatalf("unused auto endpoints invalidated pinned %s or bypassed M2W policy: %+v", name, st)
 		}
 	}
 }
@@ -160,10 +161,11 @@ func TestChecksRejectUnappliedConfig(t *testing.T) {
 				st.CheckedGeneration = before.Generation
 				st.CheckedEndpoint, st.CheckedOuter = ep, outer
 				st.CheckedPort, st.CheckedListen = p.Port, p.Listen
+				st.ExitNode, st.ExitNodeCountry, st.ExitCountry = "AMS", "NL", "US"
 			})
 			o := NewOrchestrator(s)
-			if NewServer(s, o).status()["proxies"].(map[string]ProxyState)[name].Ready {
-				t.Error("pending desired config reported ready before apply")
+			if st := NewServer(s, o).status()["proxies"].(map[string]ProxyState)[name]; st.Ready || st.TransportReady {
+				t.Error("pending desired config reported ready/transport_ready before apply")
 			}
 			workingPath := m.configPath
 			m.configPath = t.TempDir() // force write failure without stopping old child
@@ -177,23 +179,24 @@ func TestChecksRejectUnappliedConfig(t *testing.T) {
 			called := false
 			checkProxyWith(context.Background(), g, name, o, func(context.Context, string, int) (exitParse, error) {
 				called = true
-				return exitParse{node: "AMS", country: "US"}, nil
+				return exitParse{node: "AMS", country: "US", nodeCountry: "NL"}, nil
 			})
 			if st := c.snapshot(); called || st.Checks != 0 || st.Checking {
 				t.Errorf("unapplied desired config was probed/recorded: called=%v checks=%d checking=%v", called, st.Checks, st.Checking)
 			}
-			if NewServer(s, o).status()["proxies"].(map[string]ProxyState)[name].Ready {
-				t.Error("failed apply reported ready through old child")
+			if st := NewServer(s, o).status()["proxies"].(map[string]ProxyState)[name]; st.Ready || st.TransportReady {
+				t.Error("failed apply reported ready/transport_ready through old child")
 			}
 			m.configPath = workingPath
 			if err := m.Ensure(g, e, warpAccount{}); err != nil {
 				t.Fatal(err)
 			}
 			checkProxyWith(context.Background(), g, name, o, func(context.Context, string, int) (exitParse, error) {
-				return exitParse{node: "AMS", country: "US"}, nil
+				return exitParse{node: "AMS", country: "US", nodeCountry: "NL"}, nil
 			})
-			if !NewServer(s, o).status()["proxies"].(map[string]ProxyState)[name].Ready {
-				t.Fatal("successfully applied config did not become ready after fresh success")
+			st := NewServer(s, o).status()["proxies"].(map[string]ProxyState)[name]
+			if !st.TransportReady || st.Ready != (name != "m2w") {
+				t.Fatalf("applied config lacks fresh transport success or bypassed M2W policy: %+v", st)
 			}
 		})
 	}
