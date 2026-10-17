@@ -5,3 +5,5 @@
 *.report.txt
 warp-account*.json
 warpd-mihomo*.yaml
+__pycache__/
+*.pyc

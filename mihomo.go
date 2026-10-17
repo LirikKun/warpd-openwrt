@@ -264,7 +264,7 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 	if m.command != nil {
 		cmd = m.command(configPath)
 	} else {
-		cmd = exec.Command(mihomoBin, "-d", mihomoDir, "-f", configPath)
+		cmd = exec.Command(mihomoBinary(), "-d", mihomoDir, "-f", configPath)
 	}
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()

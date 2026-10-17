@@ -290,7 +290,7 @@ func (o *Orchestrator) RegisterAccount(fresh bool) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, warpScout, args...)
+	cmd := exec.CommandContext(ctx, warpScoutBinary(), args...)
 	cmd.Dir = workDir
 	cmd.Env = append(scannerEnv(cmd.Environ()), "GOMEMLIMIT=32MiB", "NO_COLOR=1", "TERM=dumb")
 	out, err := cmd.CombinedOutput()
@@ -683,7 +683,7 @@ func (o *Orchestrator) runWarpScout(args []string, maxWait time.Duration) (strin
 	if o.scoutCommand != nil {
 		cmd = o.scoutCommand(ctx, args)
 	} else {
-		cmd = exec.CommandContext(ctx, warpScout, args...)
+		cmd = exec.CommandContext(ctx, warpScoutBinary(), args...)
 		cmd.Dir = workDir
 	}
 	cmd.Env = append(scannerEnv(cmd.Environ()),

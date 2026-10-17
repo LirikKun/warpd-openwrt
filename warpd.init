@@ -1,9 +1,9 @@
 #!/bin/sh /etc/rc.common
-# warpd — WARP/WARP-to-WARP proxy supervisor for OpenWrt.
-# Provides two local SOCKS5 proxies (via warpscout socks, userspace only,
-# no TUN, no routes, no firewall changes) and a small web UI.
+# warpd — WARP, MASQUE, MASQUE H2 and MASQUE-to-WARP for OpenWrt.
+# One managed mihomo child provides the enabled SOCKS5 listeners; warpscout
+# discovers endpoints. Userspace only: no TUN, route or firewall changes.
 # Logs and scan state live in RAM (/tmp, /var/run); ROM is touched only by
-# apk package install and UCI config commits.
+# installation and explicit UCI config commits.
 
 START=99
 STOP=10
