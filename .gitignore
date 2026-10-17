@@ -1,0 +1,7 @@
+/dist/
+/backups/
+/audit/
+*.log
+*.report.txt
+warp-account*.json
+warpd-mihomo*.yaml

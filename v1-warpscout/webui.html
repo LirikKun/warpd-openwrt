@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>warpd — WARP proxies</title>
+<style>
+:root{
+  --bg:#111318; --panel:#1a1d24; --panel2:#22262f; --line:#2c313c;
+  --text:#d7dae0; --dim:#8b93a1; --ok:#4cc38a; --warn:#f5a623; --bad:#e5484d;
+  --accent:#5c9eff; --mono:ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:16px;max-width:860px;margin:0 auto}
+h1{font-size:16px;font-weight:600;letter-spacing:.02em;display:flex;align-items:center;gap:10px;margin-bottom:14px}
+h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);display:inline-block}
+h1 .dot.ok{background:var(--ok)} h1 .dot.bad{background:var(--bad)} h1 .dot.warn{background:var(--warn)}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:18px 0 8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:3px 0}
+.row .k{color:var(--dim);font-size:12px;min-width:110px}
+.row .v{font-family:var(--mono);font-size:12.5px;text-align:right;word-break:break-all}
+.v.ok{color:var(--ok)} .v.bad{color:var(--bad)} .v.warn{color:var(--warn)} .v.dim{color:var(--dim)}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+.badge.on{border-color:var(--ok);color:var(--ok)}
+.badge.bad{border-color:var(--bad);color:var(--bad)}
+.badge.warn{border-color:var(--warn);color:var(--warn)}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+button.primary{border-color:var(--accent);color:var(--accent)}
+.grid4{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:720px){.grid4{grid-template-columns:1fr}}
+input[type=text],input[type=number],select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:6px 8px;font-size:13px;width:100%}
+input:focus,select:focus{outline:none;border-color:var(--accent)}
+label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
+.log{font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;background:#0d0f13;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:220px;overflow-y:auto;color:#9aa3b2}
+.muted{color:var(--dim);font-size:12px}
+.hide{display:none}
+.toast{position:fixed;bottom:16px;right:16px;background:var(--panel2);border:1px solid var(--accent);border-radius:8px;padding:8px 14px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:60%}
+.toast.show{opacity:1}
+.spin{display:inline-block;width:10px;height:10px;border:2px solid var(--warn);border-top-color:transparent;border-radius:50%;animation:sp 1s linear infinite;vertical-align:-1px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<h1><span class="dot" id="gdot"></span> warpd</h1>
+
+<div class="grid4">
+  <div class="card" id="card-warp">
+    <div class="row"><div><b>WARP</b> <span class="badge" id="warp-badge">—</span></div><div class="v" id="warp-addr">…</div></div>
+    <div class="row"><span class="k">endpoint</span><span class="v" id="warp-ep">—</span></div>
+    <div class="row"><span class="k">выход</span><span class="v" id="warp-exit">—</span></div>
+    <div class="row"><span class="k">проверки</span><span class="v dim" id="warp-check">—</span></div>
+    <div class="actions">
+      <button onclick="restart('warp')">перезапуск</button>
+      <button onclick="scan('warp')">поиск</button>
+      <button id="warp-pinbtn" onclick="togglePin('warp')">эндпоинт вручную</button>
+      <button id="warp-clearbtn" class="hide" onclick="clearPin('warp')">снять пин</button>
+    </div>
+    <div id="warp-pinform" class="hide" style="margin-top:8px">
+      <label>эндпоинт ip:port</label>
+      <input type="text" id="warp-epin" placeholder="162.159.198.1:2408">
+      <div class="actions"><button class="primary" onclick="setEndpoint()">применить</button></div>
+    </div>
+  </div>
+
+  <div class="card" id="card-w2w">
+    <div class="row"><div><b>WARP → WARP</b> <span class="badge" id="w2w-badge">—</span></div><div class="v" id="w2w-addr">…</div></div>
+    <div class="row"><span class="k">внешний</span><span class="v" id="w2w-outer">—</span></div>
+    <div class="row"><span class="k">внутренний</span><span class="v" id="w2w-inner">—</span></div>
+    <div class="row"><span class="k">выход</span><span class="v" id="w2w-exit">—</span></div>
+    <div class="row"><span class="k">проверки</span><span class="v dim" id="w2w-check">—</span></div>
+    <div class="actions">
+      <button onclick="restart('w2w')">перезапуск</button>
+      <button onclick="scan('w2w')">поиск</button>
+      <button id="w2w-pinbtn" onclick="togglePin('w2w')">эндпоинты вручную</button>
+      <button id="w2w-clearbtn" class="hide" onclick="clearPin('w2w')">снять пин</button>
+    </div>
+    <div id="w2w-pinform" class="hide" style="margin-top:8px">
+      <label>внешний ip:port</label>
+      <input type="text" id="w2w-outin" placeholder="188.114.97.177:2408">
+      <label>внутренний ip:port</label>
+      <input type="text" id="w2w-inin" placeholder="162.159.192.1:2408">
+      <div class="actions"><button class="primary" onclick="setEndpoint()">применить</button></div>
+    </div>
+  </div>
+
+  <div class="card" id="card-masque">
+    <div class="row"><div><b>MASQUE</b> <span class="badge" id="masque-badge">—</span></div><div class="v" id="masque-addr">…</div></div>
+    <div class="row"><span class="k">endpoint</span><span class="v" id="masque-ep">—</span></div>
+    <div class="row"><span class="k">выход</span><span class="v" id="masque-exit">—</span></div>
+    <div class="row"><span class="k">проверки</span><span class="v dim" id="masque-check">—</span></div>
+    <div class="actions">
+      <button onclick="restart('masque')">перезапуск</button>
+      <button onclick="scan('masque')">поиск</button>
+      <button id="masque-pinbtn" onclick="togglePin('masque')">эндпоинт вручную</button>
+      <button id="masque-clearbtn" class="hide" onclick="clearPin('masque')">снять пин</button>
+    </div>
+    <div id="masque-pinform" class="hide" style="margin-top:8px">
+      <label>эндпоинт ip:port</label>
+      <input type="text" id="masque-epin" placeholder="162.159.198.2:500">
+      <div class="actions"><button class="primary" onclick="setEndpoint()">применить</button></div>
+    </div>
+    <p class="muted" style="margin-top:6px">CONNECT-IP over QUIC. Нода не выбирается: у MASQUE одна нода на сеть.</p>
+  </div>
+
+  <div class="card" id="card-masqueh2">
+    <div class="row"><div><b>MASQUE-H2</b> <span class="badge" id="masqueh2-badge">—</span></div><div class="v" id="masqueh2-addr">…</div></div>
+    <div class="row"><span class="k">endpoint</span><span class="v" id="masqueh2-ep">—</span></div>
+    <div class="row"><span class="k">выход</span><span class="v" id="masqueh2-exit">—</span></div>
+    <div class="row"><span class="k">проверки</span><span class="v dim" id="masqueh2-check">—</span></div>
+    <div class="actions">
+      <button onclick="restart('masqueh2')">перезапуск</button>
+      <button onclick="scan('masqueh2')">поиск</button>
+      <button id="masqueh2-pinbtn" onclick="togglePin('masqueh2')">эндпоинт вручную</button>
+      <button id="masqueh2-clearbtn" class="hide" onclick="clearPin('masqueh2')">снять пин</button>
+    </div>
+    <div id="masqueh2-pinform" class="hide" style="margin-top:8px">
+      <label>эндпоинт ip:port</label>
+      <input type="text" id="masqueh2-epin" placeholder="162.159.198.2:500">
+      <div class="actions"><button class="primary" onclick="setEndpoint()">применить</button></div>
+    </div>
+    <p class="muted" style="margin-top:6px">Тот же MASQUE поверх TCP — снаружи выглядит как обычный HTTPS.</p>
+  </div>
+
+</div>
+
+<h2>поиск эндпоинтов</h2>
+<div class="card">
+  <div class="row"><span class="k">состояние</span><span class="v" id="scan-state">—</span></div>
+  <div class="row"><span class="k">результат</span><span class="v" id="scan-result">—</span></div>
+  <div class="log" id="scan-log" style="margin-top:8px"></div>
+  <div class="actions">
+    <button class="primary" id="scan-btn" onclick="scan('both')">новый поиск (все)</button>
+  </div>
+</div>
+
+<h2>аккаунт WARP</h2>
+<div class="card">
+  <div class="actions">
+    <button onclick="register(false)">ротация ключей (register)</button>
+    <button onclick="register(true)">новый аккаунт (-fresh)</button>
+  </div>
+  <p class="muted" style="margin-top:8px">register обновляет ключи существующего аккаунта; -fresh создаёт полностью новый. Результат — в журнале.</p>
+</div>
+
+<h2>настройки</h2>
+<div class="card">
+  <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div>
+      <label>период проверки выхода, сек</label>
+      <input type="number" id="cfg-check_period" min="30" max="86400">
+      <label>мин. интервал DME-рескана, сек</label>
+      <input type="number" id="cfg-dme_rescan_gap" min="60" max="86400">
+      <label>рестарт после N неудач</label>
+      <input type="number" id="cfg-fail_restart" min="1" max="100">
+    </div>
+    <div>
+      <label>рескан после N неудач</label>
+      <input type="number" id="cfg-fail_rescan" min="2" max="100">
+      <label>адресов на подсеть (-n)</label>
+      <input type="number" id="cfg-scan_sample" min="1" max="50">
+      <label>параллельных туннелей (-jt)</label>
+      <input type="number" id="cfg-scan_jobs" min="1" max="32">
+    </div>
+  </div>
+  <label>критерий внешнего W2W</label>
+  <select id="cfg-w2w_outer_by"><option value="ping">мин. пинг</option><option value="speed">макс. скорость</option></select>
+  <label>исключить ноды (DME,SVO…)</label>
+  <input type="text" id="cfg-exclude_nodes" placeholder="DME">
+  <label>исключить страны (RU,KZ…)</label>
+  <input type="text" id="cfg-exclude_countries" placeholder="RU">
+  <div class="actions"><button class="primary" onclick="saveConfig()">сохранить</button></div>
+</div>
+
+<h2>журнал</h2>
+<div class="card"><div class="log" id="main-log"></div></div>
+
+<p class="muted" id="footer">…</p>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let secret = '';
+const params = new URLSearchParams(location.search);
+if (params.get('secret')) secret = params.get('secret');
+
+function api(path, method, body){
+  const opts = {method: method||'GET', headers: {'Content-Type':'application/json'}};
+  if (secret) opts.headers['Authorization'] = 'Bearer '+secret;
+  if (body) opts.body = JSON.stringify(body);
+  return fetch('/api/'+path, opts).then(r => r.json().catch(()=>({error:'bad response'})));
+}
+function toast(msg){
+  const t=$('toast'); t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2500);
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function fmtTime(iso){ return iso ? iso.replace('T',' ').slice(5,16) : '—' }
+function fmtElapsed(sec){
+  if (sec < 0) sec = 0;
+  const m = Math.floor(sec/60), s = Math.floor(sec%60);
+  return m ? m+'м '+s+'с' : s+'с';
+}
+
+let lastStatus = null;
+
+function renderProxy(name, p){
+  const badge=$(name+'-badge');
+  if(!p.enabled){ badge.textContent='выкл'; badge.className='badge'; }
+  else if(p.ready){ badge.textContent='работает'; badge.className='badge on'; }
+  else if(p.running){ badge.textContent='поднимается'; badge.className='badge warn'; }
+  else { badge.textContent='стоит'; badge.className='badge bad'; }
+
+  const listen = p.listen || '0.0.0.0';
+  const port = p.port;
+  const host = (listen==='0.0.0.0'||listen==='::') ? location.hostname : listen;
+  $(name+'-addr').textContent = (p.enabled && port) ? 'socks5h://'+host+':'+port : '—';
+
+  if(name==='warp'||name==='masque'||name==='masqueh2'){
+    const ep=$(name+'-ep'); ep.textContent = p.endpoint||'—';
+    ep.className='v'+(p.manual_endpoint?' warn':'');
+  } else {
+    $('w2w-outer').textContent = p.outer||'—';
+    $('w2w-inner').textContent = p.endpoint||'—';
+  }
+  const exit=$(name+'-exit');
+  exit.textContent = p.exit_info||'—';
+  exit.className='v'+(p.exit_node==='DME'?' bad':(p.exit_info?' ok':''));
+  // проверки: время · успешных из всего · серия неудач · ошибка
+  let chk = fmtTime(p.last_check)+' · успешных '+p.ok_checks+'/'+p.checks;
+  if (p.fail_streak) chk += ' · подряд неудач: '+p.fail_streak;
+  if (p.error) chk += ' · '+p.error.slice(0,90);
+  const cel=$(name+'-check'); cel.textContent=chk;
+  cel.className='v'+(p.fail_streak?' warn':' dim');
+  const clrBtn=$(name+'-clearbtn');
+  if (p.manual_endpoint){ clrBtn.classList.remove('hide'); } else { clrBtn.classList.add('hide'); }
+}
+
+function renderScan(sc){
+  const st=$('scan-state'), btn=$('scan-btn');
+  if (sc.scanning){
+    const started = sc.started ? new Date(sc.started) : null;
+    const el = started ? fmtElapsed((Date.now()-started.getTime())/1000) : '';
+    st.innerHTML = '<span class="spin"></span>идёт поиск ('+esc(sc.for||'')+
+      (sc.reason ? ', '+esc(sc.reason) : '')+')'+(el ? ' · '+el : '');
+    st.className='v warn';
+    btn.disabled = true; btn.textContent = 'поиск идёт…';
+  } else {
+    st.textContent = sc.last_scan ? 'последний: '+fmtTime(sc.last_scan) : '—';
+    st.className='v';
+    btn.disabled = false; btn.textContent = 'новый поиск (все)';
+  }
+  $('scan-result').textContent = sc.last_result||'—';
+  const logEl=$('scan-log');
+  const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 30;
+  logEl.textContent = (sc.log||[]).join('\n') || '—';
+  if (atBottom) logEl.scrollTop = 99999;
+}
+
+function renderConfig(c){
+  for (const k of ['check_period','dme_rescan_gap','fail_restart','fail_rescan','scan_sample','scan_jobs']){
+    const el=$('cfg-'+k);
+    if (el && document.activeElement!==el && c[k]!=null) el.value=c[k];
+  }
+  const sel=$('cfg-w2w_outer_by');
+  if (sel && document.activeElement!==sel && c.w2w_outer_by) sel.value=c.w2w_outer_by;
+  for (const k of ['exclude_nodes','exclude_countries']){
+    const el=$('cfg-'+k);
+    if (el && document.activeElement!==el && c[k]!=null) el.value=c[k];
+  }
+}
+
+async function refresh(){
+  let st;
+  try { st = await api('status'); } catch(e){ return; }
+  if (st.error==='unauthorized'){
+    document.body.innerHTML='<div class="card">требуется токен: откройте страницу как /?secret=...</div>';
+    return;
+  }
+  lastStatus = st;
+  if (st.proxies){
+    for (const n of ['warp','w2w','masque','masqueh2']){
+      if (st.proxies[n]) renderProxy(n, st.proxies[n]);
+    }
+  }
+  renderScan(st.scan||{});
+  renderConfig(st.config||{});
+  const gd=$('gdot'), ps=Object.values(st.proxies||{});
+  if (ps.some(p=>p.ready)) gd.className='dot ok';
+  else if (ps.some(p=>p.running)) gd.className='dot warn';
+  else gd.className='dot bad';
+  $('footer').textContent = 'warpd · '+fmtTime(st.time)+
+    ' · WARP '+(st.proxies.warp?st.proxies.warp.port:'')+
+    ' / W2W '+(st.proxies.w2w?st.proxies.w2w.port:'')+
+    ' / MASQUE '+(st.proxies.masque && st.proxies.masque.enabled ? st.proxies.masque.port : '—')+
+    ' / H2 '+(st.proxies.masqueh2 && st.proxies.masqueh2.enabled ? st.proxies.masqueh2.port : '—');
+}
+
+async function refreshLog(){
+  let d;
+  try { d = await api('log'); } catch(e){ return; }
+  if (!d || !d.lines) return;
+  const el=$('main-log');
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+  el.textContent = d.lines.join('\n') || '—';
+  if (atBottom) el.scrollTop = 99999;
+}
+
+refresh();
+refreshLog();
+setInterval(refresh, 5000);
+setInterval(refreshLog, 5000);
+
+function scan(for_){
+  api('scan','POST',{for:for_}).then(r=>{
+    toast(r.queued ? 'поиск запущен' : 'поиск уже идёт — статус выше');
+    refresh();
+  });
+}
+function restart(p){ api('restart','POST',{proxy:p}).then(()=>{toast('перезапуск'); refresh();}); }
+function register(fresh){ api('register','POST',{fresh:fresh}).then(()=>{toast('register запущен — результат в журнале'); refreshLog();}); }
+function togglePin(name){
+  $(name+'-pinform').classList.toggle('hide');
+  const form = $(name+'-pinform');
+  if (!form.classList.contains('hide') && !$(name+'-epin') && name==='warp'){}
+  if (!form.classList.contains('hide') && $(name+'-epin') && !$(name+'-epin').value){
+    if (lastStatus && lastStatus.proxies[name]) $(name+'-epin').value = lastStatus.proxies[name].endpoint||'';
+  }
+}
+function setEndpoint(){
+  const warpEp=$('warp-epin') ? $('warp-epin').value.trim() : '';
+  const outer=$('w2w-outin') ? $('w2w-outin').value.trim() : '';
+  const inner=$('w2w-inin') ? $('w2w-inin').value.trim() : '';
+  if(!$('warp-pinform').classList.contains('hide') && warpEp){
+    api('endpoint','POST',{proxy:'warp',endpoint:warpEp}).then(()=>{toast('эндпоинт применён'); refresh();});
+  }
+  if(!$('w2w-pinform').classList.contains('hide') && outer && inner){
+    api('endpoint','POST',{proxy:'w2w',outer:outer,inner:inner}).then(()=>{toast('эндпоинты применены'); refresh();});
+  }
+  for (const n of ['masque','masqueh2']){
+    const inp=$(n+'-epin');
+    if(inp && !$(n+'-pinform').classList.contains('hide') && inp.value.trim()){
+      api('endpoint','POST',{proxy:n,endpoint:inp.value.trim()}).then(()=>{toast('эндпоинт применён'); refresh();});
+    }
+  }
+}
+function clearPin(name){ api('endpoint/clear','POST',{proxy:name}).then(()=>{toast('пин снят, авто-режим'); refresh();}); }
+function saveConfig(){
+  const patch={
+    check_period:+$('cfg-check_period').value,
+    dme_rescan_gap:+$('cfg-dme_rescan_gap').value,
+    fail_restart:+$('cfg-fail_restart').value,
+    fail_rescan:+$('cfg-fail_rescan').value,
+    scan_sample:+$('cfg-scan_sample').value,
+    scan_jobs:+$('cfg-scan_jobs').value,
+    w2w_outer_by:$('cfg-w2w_outer_by').value,
+    exclude_nodes:$('cfg-exclude_nodes').value,
+    exclude_countries:$('cfg-exclude_countries').value
+  };
+  api('config','POST',patch).then(r=>{
+    if (r.error) toast('ошибка: '+r.error);
+    else { toast('сохранено'); refresh(); }
+  });
+}
+</script>
+</body>
+</html>

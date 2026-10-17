@@ -1,0 +1,59 @@
+# warpd UCI defaults — applied once on first boot after install.
+
+touch /etc/config/warpd
+
+uci -q get warpd.global >/dev/null || {
+    uci set warpd.global=warpd
+    uci set warpd.global.enabled='1'
+    uci set warpd.global.check_period='300'
+    uci set warpd.global.scan_sample='2'
+    uci set warpd.global.scan_jobs='6'
+    uci set warpd.global.web_listen='0.0.0.0'
+    uci set warpd.global.web_port='9095'
+    uci set warpd.global.web_secret=''
+    uci set warpd.global.autoscan_on_start='1'
+    uci set warpd.global.fail_restart='3'
+    uci set warpd.global.fail_rescan='5'
+    uci set warpd.global.dme_rescan_gap='600'
+}
+
+uci -q get warpd.warp >/dev/null || {
+    uci set warpd.warp=warp
+    uci set warpd.warp.enabled='1'
+    uci set warpd.warp.listen='0.0.0.0'
+    uci set warpd.warp.port='4001'
+    uci set warpd.warp.endpoint=''
+    uci set warpd.warp.protocol='awg'
+}
+
+uci -q get warpd.w2w >/dev/null || {
+    uci set warpd.w2w=w2w
+    uci set warpd.w2w.enabled='1'
+    uci set warpd.w2w.listen='0.0.0.0'
+    uci set warpd.w2w.port='4002'
+    uci set warpd.w2w.outer_endpoint=''
+    uci set warpd.w2w.inner_endpoint=''
+    uci set warpd.w2w.protocol='awg'
+    uci set warpd.w2w.outer_by='speed'
+}
+
+uci commit warpd
+exit 0
+
+uci -q get warpd.masque >/dev/null || {
+    uci set warpd.masque=warp
+    uci set warpd.masque.enabled='0'
+    uci set warpd.masque.listen='0.0.0.0'
+    uci set warpd.masque.port='4003'
+    uci set warpd.masque.endpoint=''
+}
+
+uci -q get warpd.masqueh2 >/dev/null || {
+    uci set warpd.masqueh2=warp
+    uci set warpd.masqueh2.enabled='0'
+    uci set warpd.masqueh2.listen='0.0.0.0'
+    uci set warpd.masqueh2.port='4004'
+    uci set warpd.masqueh2.endpoint=''
+}
+
+uci commit warpd
