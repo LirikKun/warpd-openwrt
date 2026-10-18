@@ -11,6 +11,7 @@ uci -q get warpd.global >/dev/null || {
     uci set warpd.global.web_listen='0.0.0.0'
     uci set warpd.global.web_port='9095'
     uci set warpd.global.web_secret=''
+    uci set warpd.global.web_language='en'
     uci set warpd.global.autoscan_on_start='1'
     uci set warpd.global.fail_restart='3'
     uci set warpd.global.fail_rescan='5'

@@ -36,6 +36,13 @@ its then-current real shell script, then GREEN in a full-suite run:
 - External reuse space: unused bundle copies budgeted -> symlink-only cost.
 - Minimal OpenWrt PATH (host/BusyBox tools): missing stat rejected all installs
   -> fresh install, config/account-preserving upgrade, special-bit mode rollback.
+- Language vertical slices: fresh defaults lacked English -> default en; unknown
+  --language -> staged-only section-aware replacement; missing option refused ->
+  insert once in named global; parse refusal leaked empty stage file -> clean
+  rollback; edit-copy disk budget omitted -> preflight reserves third copy;
+  malformed section shape accepted -> strict identifier/section validation.
+  Byte-preservation, argument rejection, BusyBox/no-host-tools and copy/start
+  failure tests additionally exercise the existing transaction machinery.
 Other tests are regression coverage of these slices, including BusyBox ash,
 asynchronous start failure, disabled/stopped state, and host-tool tripwires.
 """
@@ -95,6 +102,163 @@ class InstallerTests(unittest.TestCase):
         result = self.run_script('install.sh', *args, **kwargs)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
+
+    def test_language_start_failure_restores_config_account_boot_and_runtime(self):
+        self.put(self.base / 'fail-start', '2')
+        config = "# PRIVATE TEST CONFIG\nconfig warpd 'global'\n option enabled '1'\n option web_language 'ru'\n"
+        self.put(self.root / 'etc/config/warpd', config, 0o640)
+        self.put(self.root / 'etc/warpd/warp-account.json', 'PRIVATE TEST ACCOUNT', 0o600)
+        result = self.live('''cp /opt/bundle/bin/warpd /usr/bin/warpd
+printf old >> /usr/bin/warpd
+cp /usr/bin/warpd /opt/old-binary
+mkdir -p /etc/init.d
+cp /opt/bundle/files/warpd.init /etc/init.d/warpd
+/etc/init.d/warpd enable
+/etc/init.d/warpd start
+: > /opt/service-events
+sh /opt/bundle/install.sh --language en
+status=$?
+[ "$status" != 0 ] && /etc/init.d/warpd running
+''')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Service start failed', result.stderr)
+        self.assertEqual((self.root / 'usr/bin/warpd').read_bytes(), (self.base / 'old-binary').read_bytes())
+        self.assertEqual((self.root / 'etc/config/warpd').read_bytes(), config.encode())
+        self.assertEqual((self.root / 'etc/config/warpd').stat().st_mode & 0o777, 0o640)
+        self.assertEqual((self.root / 'etc/warpd/warp-account.json').read_bytes(), b'PRIVATE TEST ACCOUNT')
+        self.assertTrue((self.root / 'etc/rc.d/S99warpd').is_symlink())
+        self.assertEqual((self.base / 'service-events').read_text().splitlines(), ['stop', 'start', 'stop', 'start'])
+        self.assertFalse(list(self.root.rglob('.warpd-stage.*')))
+
+    def test_language_portable_bytes_and_no_host_tools(self):
+        env, tools, _ = self.no_stat_environment(busybox=True)
+        tripwire = self.base / 'tripwire'
+        for name in ('uci', 'ubus', 'apk', 'opkg', 'service'):
+            self.put(tools / name, '#!/bin/sh\nprintf called >> "$TRIPWIRE"\nexit 90\n', 0o755)
+        env['TRIPWIRE'] = str(tripwire)
+        path = self.root / 'etc/config/warpd'
+        for config, expected in [
+            ("# Тест\r\nconfig warpd global\r\n\toption 'web_language' ru\r\n", "# Тест\r\nconfig warpd global\r\n\toption 'web_language' en\r\n"),
+            ("config warpd 'global'\n option web_language 'ru'", "config warpd 'global'\n option web_language 'en'"),
+            ("config warpd 'global'", "config warpd 'global'\n    option web_language 'en'\n"),
+        ]:
+            with self.subTest(config=config):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(config.encode())
+                self.install('--language', 'en', env=env, shell='/bin/sh')
+                self.assertEqual(path.read_bytes(), expected.encode())
+                self.install(env=env, shell='/bin/sh')
+                self.assertEqual(path.read_bytes(), expected.encode())
+        self.assertFalse(tripwire.exists())
+
+    def test_language_copy_and_commit_failures_restore_original_config(self):
+        self.put(self.root / 'usr/bin/warpd', 'OLD TEST BINARY', 0o751)
+        self.put(self.root / 'etc/config/warpd', "# preserve bytes\nconfig warpd 'global'\n option enabled '0'\n option web_language 'ru'\n", 0o640)
+        self.put(self.root / 'etc/warpd/warp-account.json', 'PRIVATE TEST ACCOUNT', 0o600)
+        before = self.snapshot()
+        wrappers = self.base / 'wrappers'
+        wrappers.mkdir()
+        for command in ('cp', 'mv'):
+            with self.subTest(command=command):
+                marker = self.base / 'counter'
+                marker.unlink(missing_ok=True)
+                wrapper = wrappers / command
+                self.put(wrapper, f'#!/bin/sh\nn=0\n[ ! -f "{marker}" ] || n=$(cat "{marker}")\nn=$((n+1))\nprintf "%s" "$n" > "{marker}"\n[ "$n" != 4 ] || exit 71\nexec {shutil.which(command)} "$@"\n', 0o755)
+                result = self.run_script('install.sh', '--language', 'en', env=dict(os.environ, PATH=str(wrappers) + ':' + os.environ['PATH']))
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(self.snapshot(), before)
+                wrapper.unlink()
+
+    def test_language_space_budget_includes_edit_copy(self):
+        self.put(self.root / 'etc/config/warpd', "config warpd 'global'\n option web_language 'ru'\n#" + 'x' * (1024 * 1024), 0o600)
+        before = self.snapshot()
+        wrappers = self.base / 'wrappers'
+        self.put(wrappers / 'df', '#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 4096 1024 3072 25%% /\\n"\n', 0o755)
+        result = self.run_script('install.sh', '--language', 'en', env=dict(os.environ, PATH=str(wrappers) + ':' + os.environ['PATH']))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('space', result.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_language_argument_errors_precede_all_mutations(self):
+        self.put(self.root / 'etc/config/warpd', "# PRIVATE TEST SECRET\n", 0o600)
+        before = self.snapshot()
+        for args in [('--language',), ('--language', ''), ('--language', 'EN'), ('--language', 'fr'), ('--language', 'en', '--language', 'ru'), ('--language', '--root')]:
+            with self.subTest(args=args):
+                result = self.run_script('install.sh', *args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('language', result.stderr)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_language_refuses_options_outside_sections_and_invalid_identifiers(self):
+        path = self.root / 'etc/config/warpd'
+        for config in [
+            "option enabled '0'\nconfig warpd 'global'\n",
+            "config warpd 'global'\nconfig warp 'bad/name'\n",
+            "config warpd 'global'\noption 'bad/name' 'value'\n",
+        ]:
+            with self.subTest(config=config):
+                self.put(path, config, 0o600)
+                before = self.snapshot()
+                result = self.run_script('install.sh', '--language', 'en')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('global UCI configuration', result.stderr)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_language_invalid_configuration_fails_clean_without_secrets(self):
+        path = self.root / 'etc/config/warpd'
+        cases = [
+            "# no section PRIVATE TEST SECRET\n",
+            "config warp 'global'\n option web_language 'en'\n",
+            "config warpd 'global'\nconfig warpd 'global'\n",
+            "config warpd 'global'\n option web_language 'en'\n option web_language 'ru'\n",
+            "config warpd 'global'\n list web_language 'en'\n",
+            "config warpd 'global' extra\n option web_language 'en'\n",
+            "config warpd 'global'\n option web_secret 'PRIVATE TEST SECRET\n",
+            "config warpd 'global'\n option web_language 'en'; config warp 'x'\n",
+        ]
+        for config in cases:
+            with self.subTest(config=config):
+                self.put(path, config, 0o640)
+                before = self.snapshot()
+                result = self.run_script('install.sh', '--language', 'ru')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('global UCI configuration', result.stderr)
+                self.assertNotIn('PRIVATE TEST SECRET', result.stdout + result.stderr)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_language_inserts_into_named_global_without_touching_other_sections(self):
+        path = self.root / 'etc/config/warpd'
+        config = "# PRIVATE TEST HEADER\nconfig warp decoy\n option web_language ru\nconfig 'warpd' \"global\"\n option enabled '0'\nconfig warp 'warp'\n option enabled '1'\n"
+        self.put(path, config, 0o600)
+        self.install('--language', 'en')
+        expected = config.replace("config 'warpd' \"global\"\n", "config 'warpd' \"global\"\n    option web_language 'en'\n")
+        self.assertEqual(path.read_bytes(), expected.encode())
+        self.install('--language', 'ru')
+        self.assertEqual(path.read_bytes(), expected.replace("web_language 'en'", "web_language 'ru'").encode())
+
+    def test_requested_language_installs_and_upgrades_only_language(self):
+        self.install('--language', 'ru')
+        config_path = self.root / 'etc/config/warpd'
+        self.assertIn("option web_language 'ru'", config_path.read_text())
+        config = "# exact private config\nconfig warp 'decoy'\n option web_language 'ru'\nconfig warpd 'global' # retain header\n\toption enabled '0'\n  option web_language \"ru\"  # keep comment\n option web_secret 'PRIVATE TEST SECRET'\nconfig warp 'warp'\n option enabled '0'"
+        self.put(config_path, config, 0o600)
+        self.put(self.root / 'etc/warpd/warp-account.json', 'PRIVATE TEST ACCOUNT', 0o640)
+        (self.root / 'etc/rc.d').mkdir()
+        (self.root / 'etc/rc.d/S99warpd').symlink_to('../init.d/warpd')
+        self.install('--language', 'en')
+        expected = config.replace('option web_language "ru"', 'option web_language "en"')
+        self.assertEqual(config_path.read_bytes(), expected.encode())
+        self.assertEqual((self.root / 'etc/warpd/warp-account.json').read_bytes(), b'PRIVATE TEST ACCOUNT')
+        self.assertEqual(os.readlink(self.root / 'etc/rc.d/S99warpd'), '../init.d/warpd')
+        self.install()
+        self.assertEqual(config_path.read_bytes(), expected.encode())
+
+    def test_fresh_language_defaults_to_english(self):
+        self.install()
+        config = (self.root / 'etc/config/warpd').read_text()
+        self.assertIn("    option web_language 'en'\n", config)
+        defaults = (HERE.parent / 'warpd.uci-defaults').read_text()
+        self.assertIn("    uci set warpd.global.web_language='en'\n", defaults)
 
     def test_fresh_offline_installs_private_files_without_starting_service(self):
         result = self.install()

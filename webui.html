@@ -26,6 +26,8 @@
 </main>
 <script>
 'use strict';
+const uiLanguage = 'ru';
+const dateLocale = uiLanguage === 'en' ? 'en-US' : 'ru-RU';
 const $ = id => document.getElementById(id);
 const names = ['warp','masque','masqueh2','m2w'];
 const labels = {warp:'WARP',masque:'MASQUE',masqueh2:'MASQUE H2',m2w:'MASQUE → WARP'};
@@ -45,7 +47,7 @@ function element(tag,attrs={},text){const node=document.createElement(tag);for(c
 function safe(value){let text=String(value==null?'':value);if(secret)text=text.split(secret).join('[скрыто]');return text.replace(/Bearer\s+[^\s]+/gi,'Bearer [скрыто]').replace(/([?&]secret=)[^\s&#]*/gi,'$1[скрыто]');}
 function put(id,text,kind){const node=$(id);node.textContent=safe(text);if(kind!=null)node.className=kind;}
 function message(text,kind=''){const node=$('message');node.textContent=safe(text);node.className='notice '+kind;node.hidden=!text;}
-function fmtTime(value){if(!value||String(value).startsWith('0001-'))return '—';const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString('ru-RU'): '—';}
+function fmtTime(value){if(!value||String(value).startsWith('0001-'))return '—';const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString(dateLocale): '—';}
 function fmtElapsed(seconds){const n=Math.max(0,Math.floor(seconds));return Math.floor(n/60)+' мин '+n%60+' с';}
 function fresh(){return connected&&!needsAuth&&receivedAt>0&&Date.now()-receivedAt<15000;}
 function invalidate(text){connected=false;put('connection',text,'bad');renderAll();}
@@ -185,7 +187,7 @@ async function refresh(){
     if(epoch!==revision||seq<renderedSequence)return null;
     if(!st||!st.proxies||!st.config||!names.every(name=>st.proxies[name]&&typeof st.proxies[name].enabled==='boolean'))throw new APIError('Неполный статус сервера');
     lastStatus=st;renderedSequence=seq;receivedAt=Date.now();connected=true;needsAuth=false;$('auth').hidden=true;
-    put('connection','Связь с сервером','muted');put('updated','Обновлено '+new Date(receivedAt).toLocaleTimeString('ru-RU'));
+    put('connection','Связь с сервером','muted');put('updated','Обновлено '+new Date(receivedAt).toLocaleTimeString(dateLocale));
     put('engine-state','Общий движок mihomo: '+(st.mihomo&&st.mihomo.running?'запущен':'остановлен')+' · PID '+(st.mihomo&&st.mihomo.pid||'—')+' · поколение '+(st.mihomo&&st.mihomo.generation||'—'));
     put('footer','warpd'+(st.version?' · '+st.version:'')+' · время сервера '+fmtTime(st.time));renderAll();return st;
   }catch(err){if(epoch===revision&&seq>=renderedSequence){invalidate(needsAuth?'Требуется токен':'Нет актуальной связи');message(err.message,'bad');}return null;}

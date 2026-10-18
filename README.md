@@ -2,7 +2,7 @@
 
 [Русский](https://github.com/LirikKun/warpd-openwrt/blob/main/README.ru.md)
 
-A small WARP proxy manager for OpenWrt, with endpoint discovery, independent service switches, availability checks and exit-geography reporting. The web UI is currently in Russian.
+A small WARP proxy manager for OpenWrt, with endpoint discovery, independent service switches, availability checks and exit-geography reporting. Choose an English or Russian web UI during installation.
 
 One Mihomo process serves the enabled SOCKS5 proxies; WarpScout runs only for discovery and account registration. No TUN, routes, firewall rules or transparent traffic redirection are added. SSClash is not required.
 
@@ -22,73 +22,73 @@ One Mihomo process serves the enabled SOCKS5 proxies; WarpScout runs only for di
 
 - OpenWrt with procd and UCI, on Linux `arm64` or `amd64`. The main tested platform is OpenWrt 25.12.5, `mediatek/filogic`, `aarch64_cortex-a53`.
 - Root SSH access, free ports and enough overlay and `/tmp` space to unpack the bundle. On OpenWrt, `/tmp` uses RAM. Mihomo is the largest component; the installer checks available space.
-- A system CA trust store (`ca-bundle` or equivalent) and correct date/time for HTTPS. The installer neither changes repositories nor installs system packages automatically.
+- A system CA trust store (`ca-bundle` or equivalent) and correct date/time for HTTPS. The bootstrap can install missing supported packages after consent, using existing repositories; it never edits feeds.
 - Connectivity to Cloudflare for registration/tunnels and to HTTPS health-check services.
-- For the download procedure below: `wget` with working HTTPS certificate verification and `tar` with gzip support. Never disable TLS verification to work around a download error.
-- The installer needs `/bin/sh`, `sha256sum`, `cat`, `cp`, `mv`, `chmod`, `mkdir`, `dirname`, `uname`, `id`, `readlink`, `grep`, `wc`, `ls`, `df`, `awk`, `mktemp`, `rm`, `rmdir`, `ln`, `sleep` (usually BusyBox applets), plus `uci` on the router. File sizes are checked with `wc -c`; rollback-directory permissions with `ls -nd` and `awk`. No extra packages are installed.
+- For the initial script download below: `wget` with working HTTPS certificate verification. The bootstrap requires `curl` for release assets (offered through the same package-consent flow if missing), with a 180-second total deadline per attempt and at most three attempts per asset. Archive extraction requires `tar` with gzip support. Never disable TLS verification to work around a download error.
+- The installer needs `/bin/sh`, `sha256sum`, `cat`, `cp`, `mv`, `chmod`, `mkdir`, `dirname`, `uname`, `id`, `readlink`, `grep`, `wc`, `ls`, `df`, `awk`, `mktemp`, `rm`, `rmdir`, `ln`, `sleep` (usually BusyBox applets), plus `uci` on the router. File sizes are checked with `wc -c`; rollback-directory permissions with `ls -nd` and `awk`. The bootstrap also checks `date`, `tar`, `gzip`, `procd`, `ubus`, `jsonfilter`, procd helpers and the CA bundle. Missing supported packages are offered through `apk`/`opkg`; missing foundational firmware utilities must be restored explicitly.
 
 The bundle includes warpd and pinned versions of WarpScout 0.16.0 and Mihomo 1.19.31. Third-party binaries go into a warpd-specific directory, not over SSClash binaries. Sources and licenses: [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Installation
 
-### 1. Download, verify and install on the router
+### 1. Run the installer on the router
 
-The public [v2.1.1 release](https://github.com/LirikKun/warpd-openwrt/releases/tag/v2.1.1) provides both `linux-arm64` and `linux-amd64` bundles. No GitHub account, CLI or token is needed. This online README is the current installation guide; the existing, unchanged 2.1.1 archives still contain the older Russian README from before the repository became public. No new release is needed to follow these instructions.
-
-Connect as root, replacing the example LAN address:
+Connect over SSH as root, replacing the example address:
 
 ```sh
 ssh root@192.168.10.1
 ```
 
-Run this whole block in the router's SSH shell. It chooses the router architecture, downloads into a fresh private directory, checks SHA-256 **before extraction**, and stops on error. It does not stream downloaded code into a shell.
+Run this block. No GitHub account or token is needed. It saves the script to a private temporary file rather than piping downloaded code into a shell:
 
 ```sh
 (
-  set -e
-  [ "$(id -u)" = 0 ] || { printf '%s\n' 'Run this as root on the router.' >&2; exit 1; }
-  case "$(uname -m)" in
-    aarch64|arm64) arch=arm64 ;;
-    x86_64|amd64) arch=amd64 ;;
-    *) printf '%s\n' 'Unsupported architecture: arm64 or amd64 required.' >&2; exit 1 ;;
-  esac
-  version=2.1.1
-  umask 077; workdir=$(mktemp -d /tmp/warpd-install.XXXXXX) && cd "$workdir" || exit 1
-  printf 'Temporary directory: %s\n' "$workdir"
-  archive="warpd-${version}-linux-${arch}.tar.gz"
-  base="https://github.com/LirikKun/warpd-openwrt/releases/download/v${version}"
-  wget -O "$archive" "$base/$archive"
-  wget -O "$archive.sha256" "$base/$archive.sha256"
-  sha256sum -c "$archive.sha256"
-  tar -xzf "$archive"
-  rm -f "$archive"
-  cd "warpd-${version}-linux-${arch}"
-  sh install.sh
-  printf 'Installation finished. Temporary directory to remove manually: %s\n' "$workdir"
+  umask 077
+  script=$(mktemp /tmp/warpd-setup.XXXXXX) || exit 1
+  wget -O "$script" https://github.com/LirikKun/warpd-openwrt/releases/download/v2.2.0/install-warpd.sh &&
+    sh "$script"
+  result=$?
+  rm -f "$script"
+  exit "$result"
 )
 ```
 
-The compressed archive is removed after extraction to reduce RAM use. The subshell leaves your original shell directory unchanged; its `workdir` variable does not survive. After a successful installation, manually remove **only the exact temporary directory printed above** (including its extracted bundle and checksum), after confirming the path. On failure, use the earlier “Temporary directory” line to inspect the files before deciding whether to remove them. Do not run recursive cleanup against an unset or guessed variable.
+The installer checks OpenWrt, root access, architecture (`arm64`/`amd64`), disk space, required commands and HTTPS CA certificates. It offers to install supported missing dependencies through your configured `apk` or `opkg` repositories. It does not upgrade the entire system, edit feeds, network, firewall or SSClash settings, or disable TLS verification. Missing foundational firmware components or a package manager unable to retrieve dependencies cause a clear failure instead of a partial application install.
 
-SHA-256 detects corruption, not publisher authenticity: obtain both the archive and checksum from the trusted HTTPS release. The installer checks the bundle before changing installed files, installs a procd service and enables autostart on a fresh install. This is a portable bundle, not an APK/IPK package: it is not registered with `apk`/`opkg` and uses the uninstaller below.
+During interactive setup, choose **English / Русский** for the web UI. Upgrades can keep the current language. The script then downloads the v2.2.0 bundle, verifies SHA-256 before extraction and runs the transactional installer, which rolls back application-file replacement or service-start failures. Temporary staging is cleaned automatically. Checksums detect corruption; they do not replace trust in the publisher and HTTPS.
 
-**Optional: reuse external dependencies.** If compatible binaries are already installed and you want to avoid a second installed copy, replace the final `sh install.sh` line in the block above with this command **before running the block**. This is an alternative, not a second installation step:
+For automation, save the script as above and replace the `sh "$script"` line with the appropriate invocation:
 
 ```sh
-sh install.sh \
+# Russian UI; allow installation of missing system packages:
+sh "$script" --language ru --yes
+# English UI:
+sh "$script" --language en --yes
+# Check requirements without installing anything:
+sh "$script" --check-only
+```
+
+`--yes` consents to installing missing dependencies without another prompt. Without a terminal or this consent, missing packages are not installed. Shared system packages added by the package manager are not removed if the warpd installation fails or when warpd is uninstalled.
+
+**External dependencies.** By default, the bundle installs its own Mihomo and WarpScout. To avoid a second installed copy when compatible binaries already exist, replace the invocation with this alternative rather than installing twice:
+
+```sh
+sh "$script" --language en \
   --mihomo /opt/clash/bin/clash \
   --warpscout /usr/bin/warpscout
 ```
 
-warpd creates its own links to these executables; it neither overwrites nor removes them. A later replacement by their owner also affects warpd. Older Clash builds are not necessarily compatible: MASQUE, AmneziaWG, `dialer-proxy` and the corresponding Mihomo capabilities are required.
+warpd creates private links to these executables, without overwriting or removing them. Their owner's future updates also affect warpd. Older Clash builds may lack MASQUE, AmneziaWG or `dialer-proxy` support.
 
-**Fallback: download on a computer.** Download the router's architecture-specific archive and its `.sha256` from the same release and run `sha256sum -c warpd-2.1.1-linux-arm64.tar.gz.sha256` there (substitute `amd64` for an x86-64 router). On the router, create a private directory with `umask 077; mktemp -d /tmp/warpd-install.XXXXXX` and note the printed path. Copy **both** files into that exact directory with `scp -O`; for example, `scp -O warpd-2.1.1-linux-arm64.tar.gz warpd-2.1.1-linux-arm64.tar.gz.sha256 root@192.168.10.1:/tmp/warpd-install.REPLACE/`, replacing the destination with the real printed path. `-O` supports Dropbear devices without SFTP. In a router subshell with `set -e`, change into that directory, repeat the checksum check, then extract, remove the compressed archive, enter the extracted directory and run the chosen installer command as above. Do not extract if verification fails. Clean up only the exact staging directory after success.
+**Manual / offline installation.** The [v2.2.0 release](https://github.com/LirikKun/warpd-openwrt/releases/tag/v2.2.0) provides `linux-arm64` and `linux-amd64` archives and their `.sha256` files. Download the matching pair, run `sha256sum -c <archive-name>.sha256` **before extraction**, unpack into a private temporary directory and run `sh install.sh --language en` there. This inner installer does not download system packages: prepare requirements beforehand. Use `scp -O` when transferring from a computer to Dropbear without SFTP. Remove only your exact staging directory after success.
+
+This is a portable bundle, not an APK/IPK package: warpd itself is not registered with `apk`/`opkg` and uses the uninstaller below. Fresh installs enable autostart; upgrades preserve settings, account and service state.
 
 ### 2. First start
 
 Open `http://<router-LAN-IP>:9095/`. Only WARP is enabled by default; the other services start disabled.
 
-A fresh installation has no account. In the Russian UI, open **«Диагностика и журнал» (Diagnostics and log)** → **«Обслуживание аккаунта · опасные действия» (Account maintenance · dangerous actions)** → **«Новый аккаунт» (New account)**. Confirm and wait for successful registration in the log. Then click **«Найти для всех» (Find for all)** if discovery has not started automatically. Registration and discovery need external connectivity; an installed service is not yet a working tunnel.
+A fresh installation has no account. Open **Diagnostics and log** → **Account maintenance · destructive actions** → **New account**, or in the Russian UI **«Диагностика и журнал» (Diagnostics and log)** → **«Обслуживание аккаунта · опасные действия» (Account maintenance · destructive actions)** → **«Новый аккаунт» (New account)**. Confirm and wait for successful registration in the log. Then click **«Найти для всех» (Find for all)** if discovery has not started automatically. Registration and discovery need external connectivity; an installed service is not yet a working tunnel.
 
 Do not create a new account during a normal upgrade: this replaces shared credentials and may interrupt every service's connections.
 
@@ -100,7 +100,7 @@ Do not put tokens in URLs or publish `/etc/warpd/warp-account.json` or the activ
 
 ## Upgrading
 
-Download the new bundle and run its `install.sh` in the same way. Existing UCI settings and the account are preserved. If using external dependencies, repeat `--mihomo`/`--warpscout` explicitly to keep that layout; without these flags, dependencies from the new bundle are installed.
+Run the bootstrap from the new release in the same way, or download the new bundle and run its inner `install.sh`. Existing UCI settings and the account are preserved. If using external dependencies, repeat `--mihomo`/`--warpscout` explicitly to keep that layout; without these flags, dependencies from the new bundle are installed.
 
 Upgrading a running service briefly interrupts its proxy connections. Do not assume a previously disabled service will be enabled by an upgrade. Manual service controls:
 
@@ -170,7 +170,7 @@ Legacy manual installations without `/usr/libexec/warpd/` continue to use `/opt/
 
 ## UCI and API
 
-Main options live in `warpd.global`: `enabled`, `check_period`, `scan_sample`, `scan_jobs`, `autoscan_on_start`, `max_ping`, `exclude_nodes`, `exclude_countries`, `fail_restart`, `fail_rescan`, `dme_rescan_gap`, `web_listen`, `web_port`, `web_secret`. Exclusions are comma-separated lists. WARP excludes DME and RU by default; the scanner's country describes the HTTP colo, not necessarily the public IP.
+Main options live in `warpd.global`: `enabled`, `check_period`, `scan_sample`, `scan_jobs`, `autoscan_on_start`, `max_ping`, `exclude_nodes`, `exclude_countries`, `fail_restart`, `fail_rescan`, `dme_rescan_gap`, `web_listen`, `web_port`, `web_secret`, `web_language` (`en` or `ru`). Exclusions are comma-separated lists. WARP excludes DME and RU by default; the scanner's country describes the HTTP colo, not necessarily the public IP.
 
 `warpd.warp`, `warpd.masque`, `warpd.masqueh2` and `warpd.m2w` contain `enabled`, `listen`, `port` and manual endpoints. M2W uses `outer_endpoint` and `inner_endpoint`. An empty manual endpoint means automatic selection. UI changes apply immediately; after editing UCI externally, run `/etc/init.d/warpd restart`.
 
@@ -226,7 +226,7 @@ UI DOM tests: [ui_interaction.README.md](ui_interaction.README.md). Node.js/jsdo
 To check actual installed files without starting services, use a separate offline root:
 
 ```sh
-cd /path/to/extracted/warpd-2.1.1-linux-arm64
+cd /path/to/extracted/warpd-2.2.0-linux-arm64
 mkdir -p /absolute/path/to/empty-directory
 sh install.sh --root /absolute/path/to/empty-directory
 sh uninstall.sh --root /absolute/path/to/empty-directory --purge

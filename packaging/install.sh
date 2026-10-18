@@ -8,8 +8,14 @@ ROOT=
 OFFLINE=0
 MIHOMO=
 WARPSCOUT=
+LANGUAGE=
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --language)
+            [ "$#" -ge 2 ] || fail 'Missing value for --language'
+            [ -z "$LANGUAGE" ] || fail 'Duplicate --language'
+            case "$2" in en|ru) LANGUAGE=$2 ;; *) fail '--language must be en or ru' ;; esac
+            shift 2 ;;
         --root|--mihomo|--warpscout)
             [ "$#" -ge 2 ] || fail "Missing value for $1"
             case "$2" in /*) ;; *) fail "Expected absolute path for $1" ;; esac
@@ -134,6 +140,13 @@ done
 if [ -f "$ROOT/etc/config/warpd" ]; then
     # Existing config is staged byte-for-byte, not replaced by small defaults.
     size=$(wc -c < "$ROOT/etc/config/warpd")
+    NEEDED=$((NEEDED + size + 4096))
+fi
+if [ -n "$LANGUAGE" ]; then
+    # The edited output coexists with the staged copy and rollback original.
+    config_source="$ROOT/etc/config/warpd"
+    [ -f "$config_source" ] || config_source="$BUNDLE/files/warpd.config"
+    size=$(wc -c < "$config_source")
     NEEDED=$((NEEDED + size + 4096))
 fi
 for target in $TARGETS; do
@@ -274,7 +287,7 @@ finish() {
                 rm -f "$dest"
             fi
         fi
-        rm -f "$stage/new" "$stage/old" "$stage/committed"
+        rm -f "$stage/new" "$stage/old" "$stage/committed" "$stage/language"
         rmdir "$stage"
     done <<EOF
 $JOURNAL
@@ -349,6 +362,76 @@ if [ -e "$ROOT/etc/config/warpd" ]; then
     stage_file "$ROOT/etc/config/warpd" /etc/config/warpd 600
 else
     stage_file "$BUNDLE/files/warpd.config" /etc/config/warpd 600
+fi
+if [ -n "$LANGUAGE" ]; then
+    # Edit only the staged config, never host UCI. A deliberately strict,
+    # single-line UCI subset avoids ambiguous sections/continuations. Refuse
+    # unsupported syntax without echoing configuration (which may hold secrets).
+    config_bytes=$(wc -c < "$stage/new")
+    LC_ALL=C awk -v language="$LANGUAGE" -v bytes="$config_bytes" '
+        function tokens(line,    i,n,c,q,start,value) {
+            n = 0; i = 1
+            while (i <= length(line)) {
+                c = substr(line,i,1)
+                if (c ~ /[ \t\r]/) { i++; continue }
+                if (c == "#") break
+                start = i; q = ""; value = ""
+                if (c == "\047" || c == "\042") { q = c; i++ }
+                while (i <= length(line)) {
+                    c = substr(line,i,1)
+                    if (c == "\\") return -1
+                    if (q != "" && c == q) break
+                    if (q == "" && c ~ /[ \t\r]/) break
+                    if (q == "" && (c == "\047" || c == "\042")) return -1
+                    value = value c; i++
+                }
+                if (q != "") {
+                    if (i > length(line)) return -1
+                    i++
+                    if (i <= length(line) && substr(line,i,1) !~ /[ \t\r]/) return -1
+                }
+                n++; t[n] = value; b[n] = start; e[n] = i - 1; quote[n] = q
+            }
+            return n
+        }
+        {
+            lines[NR] = $0
+            consumed += length($0) + 1
+            endings[NR] = consumed <= bytes ? "\n" : ""
+            n = tokens($0)
+            if (n < 0) { invalid = 1; next }
+            if (n == 0) next
+            if (t[1] == "config") {
+                if (n != 2 && n != 3) { invalid = 1; next }
+                if (t[2] !~ /^[A-Za-z0-9_]+$/ || (n == 3 && t[3] !~ /^[A-Za-z0-9_]+$/)) invalid = 1
+                sections++
+                global = n == 3 && t[3] == "global"
+                if (global) {
+                    globals++
+                    header = NR
+                    if (t[2] != "warpd") invalid = 1
+                }
+            } else if ((t[1] == "option" || t[1] == "list") && n == 3) {
+                if (!sections || t[2] !~ /^[A-Za-z0-9_]+$/) invalid = 1
+                if (global && t[2] == "web_language") {
+                    options++
+                    if (t[1] != "option") invalid = 1
+                    lines[NR] = substr($0,1,b[3]-1) quote[3] language quote[3] substr($0,e[3]+1)
+                }
+            } else invalid = 1
+        }
+        END {
+            if (invalid || globals != 1 || options > 1) exit 1
+            for (i = 1; i <= NR; i++) {
+                printf "%s%s", lines[i], endings[i]
+                if (options == 0 && i == header) {
+                    if (endings[i] == "") printf "\n"
+                    printf "    option web_language %c%s%c\n", 39, language, 39
+                }
+            }
+        }
+    ' "$stage/new" > "$stage/language" || fail 'Cannot set language: unsupported or ambiguous global UCI configuration'
+    mv -f "$stage/language" "$stage/new"
 fi
 ensure_dir "$ROOT/etc/warpd"
 if [ "$OFFLINE" = 0 ] && [ "$WAS_RUNNING" = 1 ]; then

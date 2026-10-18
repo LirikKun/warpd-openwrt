@@ -50,6 +50,7 @@ type Settings struct {
 	WebListen      string
 	WebPort        int
 	WebSecret      string
+	Language       string // web_language: en|ru; legacy configurations default to ru
 	AutoscanStart  bool
 	FailRestart    int
 	FailRescan     int
@@ -123,6 +124,7 @@ func (s *Settings) Snapshot() Settings {
 		WebListen:        s.WebListen,
 		WebPort:          s.WebPort,
 		WebSecret:        s.WebSecret,
+		Language:         s.Language,
 		AutoscanStart:    s.AutoscanStart,
 		FailRestart:      s.FailRestart,
 		FailRescan:       s.FailRescan,
@@ -179,6 +181,12 @@ func uciInt(key string, def, min, max int) int {
 }
 
 func LoadSettings() *Settings {
+	// Strip only UCI's output newline; whitespace in the stored value is invalid.
+	languageBytes, languageErr := exec.Command("uci", "-q", "get", "warpd.global.web_language").Output()
+	language := strings.TrimSuffix(string(languageBytes), "\n")
+	if languageErr != nil || language != "en" && language != "ru" {
+		language = "ru"
+	}
 	s := &Settings{
 		mu:               &sync.RWMutex{},
 		Enabled:          uciBool("warpd.global.enabled", true),
@@ -189,6 +197,7 @@ func LoadSettings() *Settings {
 		WebListen:        defstr(uciGet("warpd.global.web_listen"), "0.0.0.0"),
 		WebPort:          uciInt("warpd.global.web_port", 9095, 1024, 65535),
 		WebSecret:        uciGet("warpd.global.web_secret"),
+		Language:         language,
 		AutoscanStart:    uciBool("warpd.global.autoscan_on_start", true),
 		FailRestart:      uciInt("warpd.global.fail_restart", 3, 1, 100),
 		FailRescan:       uciInt("warpd.global.fail_rescan", 5, 2, 100),
@@ -286,6 +295,7 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 		"m2w_enabled":       {uci: "warpd.m2w.enabled", kind: "bool"},
 		"m2w_port":          {uci: "warpd.m2w.port", kind: "int", min: 1024, max: 65535},
 		"web_secret":        {uci: "warpd.global.web_secret", kind: "str"},
+		"web_language":      {uci: "warpd.global.web_language", kind: "str"},
 	}
 	// Validate every field before the first UCI mutation.
 	values := make(map[string]string, len(patch))
@@ -319,6 +329,9 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 			if !ok {
 				return nil, fmt.Errorf("%s: expected string", name)
 			}
+			if name == "web_language" && str != "en" && str != "ru" {
+				return nil, fmt.Errorf("web_language: expected en or ru")
+			}
 			values[name] = str
 		}
 	}
@@ -351,6 +364,7 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 	s.ExcludeNodes = fresh.ExcludeNodes
 	s.ExcludeCountries = fresh.ExcludeCountries
 	s.WebSecret = fresh.WebSecret
+	s.Language = fresh.Language
 	for _, key := range []string{"warp", "masque", "masqueh2", "m2w"} {
 		if p, ok := s.Proxies[key]; ok {
 			f := fresh.Proxies[key]

@@ -124,6 +124,7 @@ func (srv *Server) status() map[string]any {
 		"exclude_nodes":     g.ExcludeNodes,
 		"exclude_countries": g.ExcludeCountries,
 		"web_secret_set":    g.WebSecret != "",
+		"web_language":      g.Language,
 	}
 	return map[string]any{
 		"version": version,
@@ -365,6 +366,11 @@ func (srv *Server) handler() http.Handler {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
+		// Presentation-only changes do not invalidate policy or touch the engine.
+		if _, languageOnly := patch["web_language"]; languageOnly && len(patch) == 1 {
+			writeJSON(w, 200, map[string]any{"applied": applied})
+			return
+		}
 		getCheck("m2w").clearGeo()
 		for _, key := range proxyNames {
 			if enable, _ := patch[key+"_enabled"].(bool); enable {
@@ -386,7 +392,8 @@ func (srv *Server) handler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(indexHTML))
+		g := srv.cfg.Snapshot()
+		w.Write([]byte(renderWebUI(g.Language)))
 	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
