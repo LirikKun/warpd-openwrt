@@ -12,9 +12,9 @@ func TestWebUIInitialLanguage(t *testing.T) {
 	for _, language := range []string{"en", "ru"} {
 		t.Run(language, func(t *testing.T) {
 			html := renderWebUI(language)
-			want := []string{`<html lang="ru">`, "warpd — управление прокси", "Подключение…", "Ожидание статуса", `const uiLanguage = 'ru';`}
+			want := []string{`<html lang="ru">`, "warpd — управление прокси", "Подключение…", "Ожидание статуса", `const uiLanguage = 'ru';`, "Добавить прокси", "Секретная ссылка активации", "Эффективные запреты стран colo", "транспорт только для чтения"}
 			if language == "en" {
-				want = []string{`<html lang="en">`, "warpd — proxy management", "Connecting…", "Waiting for status", `const uiLanguage = 'en';`}
+				want = []string{`<html lang="en">`, "warpd — proxy management", "Connecting…", "Waiting for status", `const uiLanguage = 'en';`, "Add proxy", "Secret activation URL", "Effective colo country exclusions", "transport is read-only"}
 			}
 			for _, text := range want {
 				if !strings.Contains(html, text) {
@@ -39,6 +39,26 @@ func TestWebUIEnglishHasNoUntranslatedTemplateText(t *testing.T) {
 	for _, line := range strings.Split(renderWebUI("en"), "\n") {
 		if strings.ContainsFunc(line, func(r rune) bool { return unicode.Is(unicode.Cyrillic, r) }) {
 			t.Errorf("untranslated English template line: %s", line)
+		}
+	}
+}
+
+func TestWebUIRelayCredentialLocalizationAndBoundaries(t *testing.T) {
+	for _, language := range []string{"ru", "en"} {
+		html := renderWebUI(language)
+		want := []string{"Аккаунт туннеля · только этот профиль", "Публичный ключ сервера из [Peer] · не производный ключ клиента", "Регистрация уже выполняется; новый запрос не добавлен.", "Готовность туннеля и выхода — в статусах сети и политики.", "Это не активация Relay", "Общий аккаунт не изменится"}
+		if language == "en" {
+			want = []string{"Tunnel account · this profile only", "Server public key from [Peer] · not the derived client key", "Registration is already pending; a new request was not queued.", "Tunnel and exit readiness: see network and policy status.", "This is not Relay activation", "The shared account will not change"}
+		}
+		for _, text := range want {
+			if !strings.Contains(html, text) {
+				t.Errorf("%s account UI missing %q", language, text)
+			}
+		}
+		for _, boundary := range []string{"input.autocomplete = 'new-password'", "confirmed: true, revision: listing.revision", "const versions = Object.fromEntries", "input.dataset.draftVersion === versions[key]"} {
+			if !strings.Contains(html, boundary) {
+				t.Errorf("%s missing credential boundary %q", language, boundary)
+			}
 		}
 	}
 }

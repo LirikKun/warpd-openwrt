@@ -15,7 +15,7 @@ func runUIRenderAssertions(t *testing.T, assertions string) {
 		t.Skip("node needed for offline UI rendering test")
 	}
 	start := strings.Index(indexHTML, "'use strict';")
-	end := strings.Index(indexHTML, "buildRows();buildConfig();")
+	end := strings.Index(indexHTML, "// Start the production console.")
 	if start < 0 || end <= start {
 		t.Fatal("embedded page script missing")
 	}

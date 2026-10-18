@@ -29,13 +29,15 @@ import (
 //
 // auth: if warpd.global.web_secret is set, require "Authorization: Bearer <secret>".
 type Server struct {
-	orch *Orchestrator
-	cfg  *Settings
-	mu   sync.Mutex
+	orch     *Orchestrator
+	cfg      *Settings
+	mu       sync.Mutex
+	relays   *relayRuntime
+	accounts *relayAccountJobs
 }
 
 func NewServer(cfg *Settings, orch *Orchestrator) *Server {
-	return &Server{orch: orch, cfg: cfg}
+	return &Server{orch: orch, cfg: cfg, accounts: newRelayAccountJobs()}
 }
 
 func (srv *Server) authorized(r *http.Request) bool {
@@ -73,39 +75,61 @@ func (srv *Server) status() map[string]any {
 	e := stateGetEndpoints()
 	process, applied := mihomo.AppliedSnapshot(g, e)
 	proxies := map[string]ProxyState{}
-	for _, name := range proxyNames {
+	for _, name := range profileIDs(g) {
 		p := g.Proxies[name]
-		if name == "m2w" {
+		if p == nil {
+			continue
+		}
+		kind := profileType(name, p)
+		active := effectiveEnabled(g, p)
+		chain := kind == "legacy-m2w" || kind == "relay-warp"
+		if chain {
 			ep, outer := liveEndpoint(name, p, e)
 			c := getCheck(name)
-			if !applied || !p.Enabled || c.snapshot().geoKey != geoKeyFor(g, process.Generation, ep, outer, p) {
+			if !applied || !active || c.snapshot().geoKey != geoKeyFor(g, process.Generation, ep, outer, p) {
 				c.clearGeo()
 			}
 		}
 		st := getCheck(name).snapshot()
-		st.Name = name
+		st.Name = p.Name
+		if st.Name == "" {
+			st.Name = name
+		}
 		st.Enabled = p.Enabled
+		st.ID, st.Type = name, kind
+		st.EffectiveEnabled = active
+		st.Paused = p.Enabled && !active
+		st.PublicListening = g.ProfileSchema > 0 && srv.orch.profileGateOpen(name)
 		st.Listen = p.Listen
 		st.Port = p.Port
-		st.Pid, st.Running = process.PID, process.Running
+		st.Pid, st.Running = process.PID, process.Running && active
 		st.Endpoint, st.Outer = liveEndpoint(name, p, e)
 		checked, checkErr := time.Parse(time.RFC3339, st.LastCheck)
 		age := time.Since(checked)
 		fresh := checkErr == nil && age >= 0 && age <= time.Duration(g.CheckPeriod)*time.Second+40*time.Second
-		st.TransportReady = applied && st.Running && p.Enabled && st.Endpoint != "" &&
-			(name != "m2w" || st.Outer != "" && st.Outer != st.Endpoint) &&
+		st.TransportReady = applied && st.Running && active && st.Endpoint != "" &&
+			(kind != "legacy-m2w" || st.Outer != "" && st.Outer != st.Endpoint) &&
 			st.FailStreak == 0 && st.Error == "" && st.OKChecks > 0 && fresh && !st.Checking &&
 			st.CheckedGeneration == process.Generation && st.CheckedEndpoint == st.Endpoint &&
-			st.CheckedOuter == st.Outer && st.CheckedPort == p.Port && st.CheckedListen == p.Listen
-		st.ForeignIPVerified = name == "m2w" && st.TransportReady &&
+			st.CheckedOuter == st.Outer && st.CheckedPort == p.Port && st.CheckedListen == p.Listen &&
+			(g.ProfileSchema == 0 || st.checkedPolicy == geoKeyFor(g, process.Generation, st.Endpoint, st.Outer, p))
+		if kind == "relay-warp" {
+			st.TransportReady = st.TransportReady && mihomo.RelayReady(g, name)
+		}
+		st.ForeignIPVerified = chain && st.TransportReady &&
 			geoVerified(g, st, geoKeyFor(g, process.Generation, st.Endpoint, st.Outer, p), time.Now())
 		st.PolicyError = ""
 		if st.TransportReady {
-			st.PolicyError = exitPolicyError(g, name, st.ExitNode, st.ExitNodeCountry, st.ExitCountry, st.ForeignIPVerified)
+			policySettings := g
+			policySettings.ExcludeNodes, policySettings.ExcludeCountries = effectiveExclusions(g, p)
+			policyName := name
+
+			st.PolicyError = exitPolicyError(policySettings, policyName, st.ExitNode, st.ExitNodeCountry, st.ExitCountry, st.ForeignIPVerified)
 		}
 		st.PolicyReady = st.TransportReady && st.PolicyError == ""
-		st.Ready = st.TransportReady && st.PolicyReady
-		if name == "m2w" {
+		st.Ready = st.TransportReady && st.PolicyReady && (g.ProfileSchema == 0 || st.PublicListening)
+
+		if kind == "legacy-m2w" {
 			st.ManualEP = p.Outer != "" || p.Inner != ""
 		} else {
 			st.ManualEP = p.Endpoint != ""
@@ -127,10 +151,15 @@ func (srv *Server) status() map[string]any {
 		"web_language":      g.Language,
 	}
 	return map[string]any{
-		"version": version,
-		"proxies": proxies,
-		"scan":    srv.orch.State(),
-		"config":  cfg,
+		"version":       version,
+		"profile_error": g.ProfileError,
+		"proxies":       proxies,
+		"profiles":      publicProfiles(g),
+		"relays":        srv.safeRelays(g),
+		"revision":      g.Revision,
+		"defaults":      map[string]any{"awg": DefaultAWGOptions()},
+		"scan":          srv.orch.State(),
+		"config":        cfg,
 		"endpoints": map[string]any{
 			"warp":     e.warp,
 			"masque":   e.masque["masque"],
@@ -147,9 +176,14 @@ func (srv *Server) status() map[string]any {
 
 func (srv *Server) handler() http.Handler {
 	mux := http.NewServeMux()
+	srv.registerProfileAPI(mux)
 	mux.HandleFunc("POST /api/proxy", func(w http.ResponseWriter, r *http.Request) {
 		if !srv.authorized(r) {
 			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if srv.cfg.Snapshot().ProfileSchema > 0 {
+			writeJSON(w, 409, map[string]string{"error": "use the profile API for dynamic profiles"})
 			return
 		}
 		var body struct {
@@ -212,8 +246,8 @@ func (srv *Server) handler() http.Handler {
 		if body.For == "" {
 			body.For = "both"
 		}
-		if body.For != "warp" && body.For != "masque" && body.For != "masqueh2" && body.For != "m2w" && body.For != "both" {
-			writeJSON(w, 400, map[string]string{"error": "for must be warp|masque|masqueh2|m2w|both"})
+		if body.For != "both" && srv.cfg.Snapshot().Proxies[body.For] == nil {
+			writeJSON(w, 400, map[string]string{"error": "for must identify an existing profile or both"})
 			return
 		}
 		if body.Reason == "" {
@@ -226,6 +260,10 @@ func (srv *Server) handler() http.Handler {
 	mux.HandleFunc("POST /api/endpoint", func(w http.ResponseWriter, r *http.Request) {
 		if !srv.authorized(r) {
 			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if srv.cfg.Snapshot().ProfileSchema > 0 {
+			writeJSON(w, 409, map[string]string{"error": "use the profile API for dynamic profiles"})
 			return
 		}
 		var body struct {
@@ -279,6 +317,10 @@ func (srv *Server) handler() http.Handler {
 	mux.HandleFunc("POST /api/endpoint/clear", func(w http.ResponseWriter, r *http.Request) {
 		if !srv.authorized(r) {
 			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if srv.cfg.Snapshot().ProfileSchema > 0 {
+			writeJSON(w, 409, map[string]string{"error": "use the profile API for dynamic profiles"})
 			return
 		}
 		var body struct {
@@ -506,17 +548,7 @@ func (srv *Server) reapply() {
 
 // liveEndpoint returns the endpoint (and outer, for chains) currently served.
 func liveEndpoint(name string, p *ProxySettings, e endpoints) (ep, outer string) {
-	switch name {
-	case "warp":
-		return firstNonEmpty(p.Endpoint, e.warp), ""
-	case "masque":
-		return firstNonEmpty(p.Endpoint, e.masque["masque"]), ""
-	case "masqueh2":
-		return firstNonEmpty(p.Endpoint, e.masque["masqueh2"]), ""
-	case "m2w":
-		return firstNonEmpty(p.Inner, e.warp), firstNonEmpty(p.Outer, e.masque["masque"])
-	}
-	return "", ""
+	return profileLiveEndpoint(name, p, e)
 }
 
 var _ = fmt.Sprintf

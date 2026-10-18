@@ -71,9 +71,9 @@ func runChecks(ctx context.Context, cfg *Settings, orch *Orchestrator) {
 		process := mihomo.Snapshot()
 		var served []string
 		var probes sync.WaitGroup
-		for _, name := range proxyNames {
+		for _, name := range profileIDs(g) {
 			p := g.Proxies[name]
-			if p == nil || !p.Enabled {
+			if !effectiveEnabled(g, p) {
 				continue
 			}
 			// A proxy only serves once all of its endpoints exist.
@@ -134,7 +134,7 @@ func checkProxyWith(ctx context.Context, g Settings, name string, orch *Orchestr
 	p := g.Proxies[name]
 	e := stateGetEndpoints()
 	process, applied := mihomo.AppliedSnapshot(g, e)
-	if !applied || p == nil || !p.Enabled {
+	if !applied || !effectiveEnabled(g, p) || profileType(name, p) == "relay-warp" && !mihomo.RelayReady(g, name) {
 		getCheck(name).clearGeo()
 		return
 	}
@@ -144,7 +144,8 @@ func checkProxyWith(ctx context.Context, g Settings, name string, orch *Orchestr
 	defer c.set(func(st *ProxyState) { st.Checking = false })
 	// socksMetaCheck owns all retries within one 35-second total budget.
 	// A second retry loop here used to multiply that budget into minutes.
-	res, err := probe(ctx, p.Listen, p.Port)
+	probeListen, probePort := profileProbeAddress(g, name, p)
+	res, err := probe(ctx, probeListen, probePort)
 	if ctx.Err() != nil {
 		return // shutdown is not a failed health check
 	}
@@ -156,20 +157,20 @@ func checkProxyWith(ctx context.Context, g Settings, name string, orch *Orchestr
 	currentEndpoints := stateGetEndpoints()
 	after, applied := mihomo.AppliedSnapshot(current, currentEndpoints)
 	fresh := current.Proxies[name]
-	if !applied || fresh == nil {
+	if !applied || fresh == nil || profileType(name, fresh) == "relay-warp" && !mihomo.RelayReady(current, name) || g.ProfileSchema > 0 && !scanIdentityEqual(g, current, name) {
 		return
 	}
 	currentEP, currentOuter := liveEndpoint(name, fresh, currentEndpoints)
 	if after.Generation != process.Generation || after.Running != process.Running ||
-		!fresh.Enabled || fresh.Port != p.Port || fresh.Listen != p.Listen ||
+		!effectiveEnabled(current, fresh) || fresh.Port != p.Port || fresh.Listen != p.Listen ||
 		currentEP != ep || currentOuter != outer {
 		return // a result from an obsolete applied configuration is not current health
 	}
-	if name == "m2w" {
+	if profileType(name, p) == "legacy-m2w" || profileType(name, p) == "relay-warp" {
 		if err != nil {
 			c.clearGeo()
 		} else {
-			c.observeGeo(ctx, current, res, geoKeyFor(current, process.Generation, ep, outer, p))
+			c.observeGeo(ctx, profilePolicySettings(current, p), res, geoKeyFor(current, process.Generation, ep, outer, p))
 		}
 		if ctx.Err() != nil {
 			c.clearGeo()
@@ -181,7 +182,7 @@ func checkProxyWith(ctx context.Context, g Settings, name string, orch *Orchestr
 		latestEPs := stateGetEndpoints()
 		latestProcess, ok := mihomo.AppliedSnapshot(latest, latestEPs)
 		latestP := latest.Proxies[name]
-		if !ok || latestP == nil || !latestP.Enabled {
+		if !ok || latestP == nil || !latestP.Enabled || profileType(name, latestP) == "relay-warp" && !mihomo.RelayReady(latest, name) {
 			c.clearGeo()
 			return
 		}
@@ -197,7 +198,10 @@ func checkProxyWith(ctx context.Context, g Settings, name string, orch *Orchestr
 		st.CheckedGeneration = process.Generation
 		st.CheckedEndpoint, st.CheckedOuter = ep, outer
 		st.CheckedPort, st.CheckedListen = p.Port, p.Listen
+		st.checkedPolicy = geoKeyFor(current, process.Generation, ep, outer, p)
+		st.Checking = false
 	})
+	orch.syncProfileGatesLocked(current)
 }
 
 // recordProxyResult is the state/automation boundary after one bounded probe.
@@ -238,7 +242,7 @@ func recordProxyResult(g Settings, name string, orch *Orchestrator, res exitPars
 	}
 	// /meta is an observed HTTP serving colo, not tunnel-peer identity.
 	// Only WARP has an existing scanner that can honor these exclusions.
-	if reason := exitPolicyError(g, name, res.node, res.nodeCountry, res.country); name == "warp" && reason != "" {
+	if reason := exitPolicyError(g, name, res.node, res.nodeCountry, res.country); profileType(name, g.Proxies[name]) == "warp" && reason != "" {
 		if orch.requestScan(name, reason) {
 			c.set(func(st *ProxyState) { st.Rescans++ })
 			logg.Printf("[%s] %s -> scan queued", name, reason)
@@ -276,11 +280,13 @@ var _ = log.Printf
 // exitPolicyError assesses the observation only. Callers separately require fresh
 // transport health bound to the applied configuration and owned listeners.
 func exitPolicyError(g Settings, name, node, nodeCountry, publicCountry string, verified ...bool) string {
-	if name != "warp" && name != "masque" && name != "masqueh2" && name != "m2w" {
+	kind := profileType(name, g.Proxies[name])
+	if kind == "" {
 		return "unknown exit policy"
 	}
+	g = profilePolicySettings(g, g.Proxies[name])
 	reason := observedNodePolicyError(g, node, nodeCountry)
-	if name == "m2w" {
+	if kind == "legacy-m2w" || kind == "relay-warp" {
 		if reason != "" {
 			reason += "; "
 		}

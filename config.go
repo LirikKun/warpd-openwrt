@@ -41,7 +41,8 @@ import (
 //	    option outer_by 'ping'         # ping|speed
 type Settings struct {
 	// Only live settings own a lock; value snapshots do not copy a mutex.
-	mu *sync.RWMutex
+	mu        *sync.RWMutex
+	profileMu *sync.Mutex
 
 	Enabled        bool
 	CheckPeriod    int
@@ -63,20 +64,31 @@ type Settings struct {
 
 	MaxPing int // max endpoint ping (ms, 0 = unlimited) for endpoint selection
 
-	Proxies map[string]*ProxySettings
+	Proxies       map[string]*ProxySettings
+	Relays        map[string]*RelaySettings
+	ProfilePath   string
+	ProfileSchema int
+	Revision      uint64
+	ProfileError  string // safe initialization failure, never contains credential data
+	legacyPresent map[string]bool
+	legacyFresh   bool
 }
 
 type ProxySettings struct {
-	Key      string
-	Enabled  bool
-	Listen   string
-	Port     int
-	Endpoint string // warp: manual pin
-	Outer    string // m2w: manual pin outer (masque endpoint)
-	Inner    string // m2w: manual pin inner (warp endpoint)
-	Protocol string
-	GenI1    string
-	OuterBy  string
+	Key                                          string
+	Name, Type, Transport, RelayID, RelayCountry string
+	ExcludeNodes, ExcludeCountries               string
+	AWG                                          AWGOptions
+	Credential                                   RelayCredential `json:"credential,omitempty"`
+	Enabled                                      bool
+	Listen                                       string
+	Port                                         int
+	Endpoint                                     string // warp: manual pin
+	Outer                                        string // m2w: manual pin outer (masque endpoint)
+	Inner                                        string // m2w: manual pin inner (warp endpoint)
+	Protocol                                     string
+	GenI1                                        string
+	OuterBy                                      string
 }
 
 func (p *ProxySettings) defaults(key string) *ProxySettings {
@@ -133,10 +145,26 @@ func (s *Settings) Snapshot() Settings {
 		ExcludeNodes:     s.ExcludeNodes,
 		ExcludeCountries: s.ExcludeCountries,
 		Proxies:          map[string]*ProxySettings{},
+		Relays:           map[string]*RelaySettings{},
+		ProfilePath:      s.ProfilePath, ProfileSchema: s.ProfileSchema, Revision: s.Revision, ProfileError: s.ProfileError,
+		legacyPresent: map[string]bool{}, legacyFresh: s.legacyFresh,
 	}
 	for k, v := range s.Proxies {
+		if v == nil {
+			out.Proxies[k] = nil
+			continue
+		}
 		cp := *v
 		out.Proxies[k] = &cp
+	}
+	for k, v := range s.Relays {
+		if v != nil {
+			cp := *v
+			out.Relays[k] = &cp
+		}
+	}
+	for k, v := range s.legacyPresent {
+		out.legacyPresent[k] = v
 	}
 	return out
 }
@@ -207,10 +235,23 @@ func LoadSettings() *Settings {
 		ExcludeCountries: uciGet("warpd.global.exclude_countries"),
 	}
 
+	// Load all option values independently of enabled/port presence. A legacy
+	// section may contain only a bind or pin and still must migrate losslessly.
+	present := map[string]bool{}
+	for _, key := range []string{"warp", "masque", "masqueh2", "m2w"} {
+		for _, suffix := range []string{"", ".enabled", ".listen", ".port", ".endpoint", ".outer_endpoint", ".inner_endpoint", ".protocol", ".gen_i1", ".outer_by"} {
+			if _, err := exec.Command("uci", "-q", "get", "warpd."+key+suffix).Output(); err == nil {
+				present[key] = true
+				break
+			}
+		}
+	}
 	warp := &ProxySettings{}
 	warp.defaults("warp")
 	if uciGet("warpd.warp.port") != "" || uciGet("warpd.warp.enabled") != "" || uciGet("warpd.warp.endpoint") != "" {
 		warp.Enabled = uciBool("warpd.warp.enabled", true)
+	}
+	if present["warp"] {
 		warp.Listen = defstr(uciGet("warpd.warp.listen"), warp.Listen)
 		warp.Port = uciInt("warpd.warp.port", warp.Port, 1024, 65535)
 		warp.Endpoint = uciGet("warpd.warp.endpoint")
@@ -220,7 +261,7 @@ func LoadSettings() *Settings {
 
 	mq := &ProxySettings{}
 	mq.defaults("masque")
-	if uciGet("warpd.masque.port") != "" || uciGet("warpd.masque.enabled") != "" {
+	if present["masque"] {
 		mq.Enabled = uciBool("warpd.masque.enabled", false)
 		mq.Listen = defstr(uciGet("warpd.masque.listen"), mq.Listen)
 		mq.Port = uciInt("warpd.masque.port", mq.Port, 1024, 65535)
@@ -230,7 +271,7 @@ func LoadSettings() *Settings {
 
 	mqh := &ProxySettings{}
 	mqh.defaults("masqueh2")
-	if uciGet("warpd.masqueh2.port") != "" || uciGet("warpd.masqueh2.enabled") != "" {
+	if present["masqueh2"] {
 		mqh.Enabled = uciBool("warpd.masqueh2.enabled", false)
 		mqh.Listen = defstr(uciGet("warpd.masqueh2.listen"), mqh.Listen)
 		mqh.Port = uciInt("warpd.masqueh2.port", mqh.Port, 1024, 65535)
@@ -240,7 +281,7 @@ func LoadSettings() *Settings {
 
 	m2w := &ProxySettings{}
 	m2w.defaults("m2w")
-	if uciGet("warpd.m2w.port") != "" || uciGet("warpd.m2w.enabled") != "" {
+	if present["m2w"] {
 		m2w.Enabled = uciBool("warpd.m2w.enabled", false)
 		m2w.Listen = defstr(uciGet("warpd.m2w.listen"), m2w.Listen)
 		m2w.Port = uciInt("warpd.m2w.port", m2w.Port, 1024, 65535)
@@ -254,6 +295,8 @@ func LoadSettings() *Settings {
 		"masqueh2": mqh,
 		"m2w":      m2w,
 	}
+	s.legacyPresent = present
+	s.legacyFresh = uciGet("warpd.global.profile_schema") == "1"
 	return s
 }
 
@@ -266,6 +309,7 @@ func defstr(v, def string) string {
 
 // ApplyConfigPatch updates UCI and the live settings from a map of changes.
 func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err error) {
+	current := s.Snapshot()
 	type binding struct {
 		uci  string
 		kind string // int, bool, str
@@ -300,6 +344,13 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 	// Validate every field before the first UCI mutation.
 	values := make(map[string]string, len(patch))
 	for name, raw := range patch {
+		if current.ProfileSchema > 0 {
+			for _, prefix := range []string{"warp_", "masque_", "masqueh2_", "m2w_"} {
+				if strings.HasPrefix(name, prefix) {
+					return nil, fmt.Errorf("fixed-slot settings are read-only after profile migration")
+				}
+			}
+		}
 		b, ok := bindings[name]
 		if !ok {
 			return nil, fmt.Errorf("unknown setting: %s", name)
@@ -331,6 +382,13 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 			}
 			if name == "web_language" && str != "en" && str != "ru" {
 				return nil, fmt.Errorf("web_language: expected en or ru")
+			}
+			if name == "exclude_nodes" || name == "exclude_countries" {
+				var err error
+				str, err = normalizedCodes(str, name == "exclude_countries")
+				if err != nil {
+					return nil, fmt.Errorf("%s: invalid exclusion code", name)
+				}
 			}
 			values[name] = str
 		}
@@ -366,6 +424,9 @@ func (s *Settings) ApplyConfigPatch(patch map[string]any) (applied []string, err
 	s.WebSecret = fresh.WebSecret
 	s.Language = fresh.Language
 	for _, key := range []string{"warp", "masque", "masqueh2", "m2w"} {
+		if current.ProfileSchema > 0 {
+			break
+		}
 		if p, ok := s.Proxies[key]; ok {
 			f := fresh.Proxies[key]
 			p.Enabled = f.Enabled

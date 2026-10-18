@@ -601,6 +601,41 @@ printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 9999
         self.assertFalse((self.base / 'events').exists())
         self.clean()
 
+    def test_private_and_configuration_dependencies_fail_before_download(self):
+        for path in ('etc/warpd/profiles.json', 'etc/warpd/warp-account.json',
+                     'usr/libexec/config.yaml', 'usr/libexec/configs/engine'):
+            with self.subTest(path=path):
+                self.put(path, '#!/bin/sh\n# SYNTHETIC PRIVATE FIXTURE\nexit 0\n', 0o755)
+                before = (self.root / path).read_bytes()
+                result = self.run_script('--mihomo', '/' + path)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((self.base / 'events').exists(), 'private dependency reached download')
+                self.assertEqual((self.root / path).read_bytes(), before)
+                self.clean()
+
+    def test_dependency_hardlink_cannot_alias_profile_credentials(self):
+        self.put('etc/warpd/profiles.json', '#!/bin/sh\n# SYNTHETIC PRIVATE FIXTURE\nexit 0\n', 0o755)
+        private = self.root / 'etc/warpd/profiles.json'
+        alias = self.root / 'usr/libexec/shared-engine'
+        os.link(private, alias)
+        before = private.read_bytes()
+        result = self.run_script('--warpscout', '/usr/libexec/shared-engine')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.base / 'events').exists(), 'credential hardlink reached download')
+        self.assertEqual(private.read_bytes(), before)
+        self.assertEqual(private.stat().st_mode & 0o777, 0o755)
+        self.clean()
+
+    def test_peak_space_includes_profile_rollback_copy(self):
+        self.put('etc/warpd/profiles.json', 'x' * (2 * 1024 * 1024))
+        self.put('tmp/shared', '#!/bin/sh\nexit 0\n', 0o755)
+        available_kb = (1048576 + 12582912 + 1048576) // 1024
+        self.put('tools/df', '#!/bin/sh\ncase "$2" in /tmp) n=999999; mount=/tmp;; *) n=' + str(available_kb) + '; mount=/overlay;; esac\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 999999 0 %s 0%% %s\\n" "$n" "$mount"\n', 0o755)
+        result = self.run_script('--mihomo', '/tmp/shared', '--warpscout', '/tmp/shared')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('space', result.stderr.lower())
+        self.assertFalse((self.base / 'events').exists(), 'insufficient rollback space reached download')
+
     def test_check_only_reports_ready_without_download_or_install(self):
         result = self.run_script('--check-only')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -1,9 +1,22 @@
-# warpd UCI defaults — applied once on first boot after install.
+# warpd UCI defaults — fresh seed only; dynamic profiles belong to the daemon.
+set -eu
+# Never replay defaults over any existing UCI (including legacy migration input)
+# or an existing/explicitly empty dynamic store. Never follow config symlinks.
+for directory in /etc /etc/config /etc/warpd; do
+    [ ! -L "$directory" ] || exit 1
+    [ ! -e "$directory" ] || [ -d "$directory" ] || exit 1
+done
+[ ! -L /etc/config/warpd ] || exit 1
+[ ! -e /etc/config/warpd ] || [ -f /etc/config/warpd ] || exit 1
+[ ! -f /etc/config/warpd ] || exit 0
+[ ! -e /etc/warpd/profiles.json ] && [ ! -L /etc/warpd/profiles.json ] || exit 0
 
+umask 077
 touch /etc/config/warpd
 
 uci -q get warpd.global >/dev/null || {
     uci set warpd.global=warpd
+    uci set warpd.global.profile_schema='1'
     uci set warpd.global.enabled='1'
     uci set warpd.global.check_period='300'
     uci set warpd.global.scan_sample='2'
@@ -26,31 +39,6 @@ uci -q get warpd.warp >/dev/null || {
     uci set warpd.warp.port='4001'
     uci set warpd.warp.endpoint=''
     uci set warpd.warp.protocol='awg'
-}
-
-uci -q get warpd.masque >/dev/null || {
-    uci set warpd.masque=warp
-    uci set warpd.masque.enabled='0'
-    uci set warpd.masque.listen='0.0.0.0'
-    uci set warpd.masque.port='4003'
-    uci set warpd.masque.endpoint=''
-}
-
-uci -q get warpd.masqueh2 >/dev/null || {
-    uci set warpd.masqueh2=warp
-    uci set warpd.masqueh2.enabled='0'
-    uci set warpd.masqueh2.listen='0.0.0.0'
-    uci set warpd.masqueh2.port='4004'
-    uci set warpd.masqueh2.endpoint=''
-}
-
-uci -q get warpd.m2w >/dev/null || {
-    uci set warpd.m2w=warp
-    uci set warpd.m2w.enabled='0'
-    uci set warpd.m2w.listen='0.0.0.0'
-    uci set warpd.m2w.port='4005'
-    uci set warpd.m2w.outer_endpoint=''
-    uci set warpd.m2w.inner_endpoint=''
 }
 
 uci commit warpd

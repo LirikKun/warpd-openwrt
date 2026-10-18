@@ -1,560 +1,1583 @@
-// Offline DOM integration tests. See ui_interaction.README.md for setup.
-const {test} = require('node:test');
+// Execute complete production JavaScript; mock HTTP boundary only.
+const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {execFileSync} = require('node:child_process');
-const {JSDOM} = require(process.env.JSDOM_PATH || 'jsdom');
-const html = fs.readFileSync(__dirname + '/webui.html', 'utf8');
-let productionPages;
-function rendered(language){
-  if(!productionPages){
-    const dir=fs.mkdtempSync(path.join(os.tmpdir(),'warpd-ui-locales-'));
+const { execFileSync } = require('node:child_process');
+const { JSDOM } = require(process.env.JSDOM_PATH || 'jsdom');
+let pages;
+function rendered(language = 'ru') {
+  if (!pages) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'warpd-ui-locales-'));
     try {
-      execFileSync(process.env.GO_BINARY||'go',['test','webui.go','webui_i18n_test.go','-run','^TestWebUILocalizationFixtures$','-count=1'],{cwd:__dirname,env:{...process.env,WARPD_UI_FIXTURES:dir},stdio:'pipe'});
-      productionPages=Object.fromEntries(['en','ru'].map(locale=>[locale,fs.readFileSync(path.join(dir,locale+'.html'),'utf8')]));
-    }finally{fs.rmSync(dir,{recursive:true,force:true});}
+      execFileSync(
+        process.env.GO_BINARY || 'go',
+        [
+          'test',
+          'webui.go',
+          'webui_i18n_test.go',
+          '-run',
+          '^TestWebUILocalizationFixtures$',
+          '-count=1',
+        ],
+        {
+          cwd: __dirname,
+          env: { ...process.env, WARPD_UI_FIXTURES: dir },
+          stdio: 'pipe',
+        },
+      );
+      pages = Object.fromEntries(
+        ['ru', 'en'].map((l) => [
+          l,
+          fs.readFileSync(path.join(dir, l + '.html'), 'utf8'),
+        ]),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
-  return productionPages[language];
+  return pages[language];
 }
-function assertEnglishDOM(document){
-  const body=document.body.cloneNode(true);
-  body.querySelectorAll('script').forEach(node=>node.remove());
-  assert.doesNotMatch(body.textContent,/[А-Яа-яЁё]/,'English UI-owned text contains Russian');
-  for(const node of document.querySelectorAll('[aria-label],[placeholder],[title]')){
-    for(const attr of ['aria-label','placeholder','title'])assert.doesNotMatch(node.getAttribute(attr)||'',/[А-Яа-яЁё]/,node.id+': '+attr);
-  }
+const clone = (x) => JSON.parse(JSON.stringify(x));
+const awg = {
+  preset: 'supported-v1',
+  jc: 4,
+  jmin: 40,
+  jmax: 70,
+  s1: 0,
+  s2: 0,
+  h1: 1,
+  h2: 2,
+  h3: 3,
+  h4: 4,
+  i1: '',
+};
+function profile(id, type = 'warp', extra = {}) {
+  return {
+    id,
+    name: id,
+    type,
+    transport: type === 'masque' ? 'quic' : '',
+    enabled: true,
+    effective_enabled: true,
+    listen: '0.0.0.0',
+    port: 1080,
+    endpoint: '192.0.2.1:2408',
+    relay_id: '',
+    relay_country: '',
+    exclude_nodes: '',
+    exclude_countries: '',
+    effective_exclude_nodes: 'DME,SVO',
+    effective_exclude_countries: 'RU',
+    awg: clone(awg),
+    ...extra,
+  };
 }
-const keys = ['warp','masque','masqueh2','m2w'];
-const clone = value => JSON.parse(JSON.stringify(value));
-function status(){
-  return {time:new Date().toISOString(), version:'offline-test', config:{check_period:30,dme_rescan_gap:300,fail_restart:3,fail_rescan:5,scan_sample:2,scan_jobs:4,max_ping:0,autoscan_start:true,exclude_nodes:'DME',exclude_countries:'RU'},
-    scan:{scanning:false,log:[]}, mihomo:{running:true,pid:123,generation:4}, proxies:Object.fromEntries(keys.map((key,i)=>[key,{enabled:true,running:true,ready:true,transport_ready:true,policy_ready:true,foreign_ip_verified:key==='m2w',last_check:new Date().toISOString(),checks:10,ok_checks:10,fail_streak:0,endpoint:'192.0.2.1:2408',outer:key==='m2w'?'192.0.2.2:443':'',listen:'0.0.0.0',port:1080+i,exit_node:'FRA',exit_node_country:'DE',exit_country:'DE',checked_generation:4}]))};
+function status() {
+  const profiles = [
+    profile('p-a'),
+    profile('p-b', 'warp', { port: 1081 }),
+    profile('p-h2', 'masque', { port: 1082, transport: 'http2' }),
+  ];
+  return {
+    revision: 1,
+    profiles,
+    relays: [],
+    defaults: { awg },
+    config: {
+      check_period: 30,
+      dme_rescan_gap: 300,
+      fail_restart: 3,
+      fail_rescan: 5,
+      scan_sample: 2,
+      scan_jobs: 4,
+      max_ping: 0,
+      autoscan_start: true,
+      exclude_nodes: 'DME',
+      exclude_countries: 'RU',
+      web_language: 'ru',
+    },
+    scan: { scanning: false, log: [] },
+    mihomo: { running: true, pid: 123, generation: 4 },
+    proxies: Object.fromEntries(
+      profiles.map((p) => [
+        p.id,
+        {
+          ...p,
+          running: true,
+          transport_ready: true,
+          policy_ready: true,
+          ready: true,
+          last_check: new Date().toISOString(),
+          checks: 10,
+          ok_checks: 10,
+          exit_node: 'FRA',
+          exit_node_country: 'DE',
+          exit_country: 'RU',
+        },
+      ]),
+    ),
+  };
 }
-const response=(data,code=200)=>({ok:code>=200&&code<300,status:code,json:async()=>clone(data)});
-async function settle(){for(let i=0;i<8;i++) await new Promise(resolve=>setImmediate(resolve));}
-async function mount(options={}){
-  const state=status(), calls=[], timers=[];
-  let handler=options.handler;
-  const dom=new JSDOM(options.html||html,{url:options.url||'http://console.test/',runScripts:'dangerously',pretendToBeVisual:true,beforeParse(w){
-    w.setInterval=(fn)=>{timers.push(fn);return timers.length;};
-    w.confirm=()=>false;
-    w.fetch=async(path,opts={})=>{
-      calls.push({path,method:opts.method||'GET',headers:clone(opts.headers||{}),body:opts.body?JSON.parse(opts.body):undefined});
-      if(handler){const result=await handler(path,opts,state);if(result)return result;}
-      if(path==='/api/status') return response(state);
-      if(path==='/api/log') return response({lines:[]});
-      if(path==='/api/proxy'){const b=JSON.parse(opts.body);state.proxies[b.proxy].enabled=b.enabled;return response({ok:true});}
-      return response({ok:true});
-    };
-  }});
+// DTOs mirror DTO-API-CONTRACT.md; no credential-bearing readback fixture.
+function relayAccountState(extra = {}) {
+  return { state: 'idle', pending: false, credential_mode: '',
+    credential_configured: false, runtime_available: false, ...extra };
+}
+function withRelayProfile() {
+  const s = status();
+  const p = profile('p-relay', 'relay-warp', { relay_id: 'r-access',
+    relay_country: 'DE', credential_mode: '', credential_configured: false });
+  s.profiles.push(p);
+  s.proxies[p.id] = { ...p, running: false, ready: false,
+    transport_ready: false, policy_ready: false,
+    error: 'Relay runtime unavailable' };
+  s.relays.push({ id: 'r-access', name: 'Access', enabled: true,
+    configured: true, path_confirmed: true, monitor_interval: 300,
+    source_ip: '', interface: '', linked_profiles: 1 });
+  return s;
+}
+const response = (data, code = 200) => ({
+  ok: code >= 200 && code < 300,
+  status: code,
+  json: async () => clone(data),
+});
+async function settle() {
+  for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+}
+async function mount(options = {}) {
+  const state = options.state || status(),
+    calls = [],
+    timers = [],
+    errors = [];
+  let handler = options.handler;
+  const dom = new JSDOM(rendered(options.language), {
+    url: options.url || 'http://console.test/',
+    runScripts: 'dangerously',
+    pretendToBeVisual: true,
+    beforeParse(w) {
+      w.setInterval = (fn) => {
+        timers.push(fn);
+        return timers.length;
+      };
+      w.confirm = () => false;
+      w.addEventListener('error', (e) => errors.push(e.error));
+      w.fetch = async (p, opts = {}) => {
+        const body = opts.body ? JSON.parse(opts.body) : undefined;
+        calls.push({
+          path: p,
+          method: opts.method || 'GET',
+          headers: clone(opts.headers || {}),
+          body,
+        });
+        if (handler) {
+          const r = await handler(p, opts, state);
+          if (r) return r;
+        }
+        if (p === '/api/status') return response(state);
+        if (p === '/api/log') return response({ lines: [] });
+        if (p === '/api/config') {
+          Object.assign(state.config, body);
+          return response({ applied: true });
+        }
+        const m = p.match(/^\/api\/(profiles|relays)\/([^/]+)$/);
+        if (m) {
+          const list = state[m[1]],
+            item = list.find((x) => x.id === m[2]);
+          if (opts.method === 'DELETE') {
+            list.splice(list.indexOf(item), 1);
+            delete state.proxies[m[2]];
+          } else {
+            Object.assign(item, body);
+            if (m[1] === 'profiles')
+              Object.assign(state.proxies[item.id], body);
+          }
+          state.revision++;
+          return response({ persisted: true, applied: true });
+        }
+        if (p === '/api/profiles') {
+          const id = 'new-' + state.revision++,
+            p = profile(id, body.type, body);
+          state.profiles.push(p);
+          state.proxies[id] = { ...p };
+          return response({ id, persisted: true, applied: true }, 201);
+        }
+        if (p === '/api/relays') {
+          const id = 'r-' + state.revision++;
+          state.relays.push({
+            id,
+            configured: !!body.url,
+            linked_profiles: 0,
+            ...body,
+            url: undefined,
+          });
+          return response({ id, persisted: true, applied: true }, 201);
+        }
+        return response({ queued: false });
+      };
+    },
+  });
   await settle();
-  return {dom,w:dom.window,d:dom.window.document,state,calls,timers,setHandler:fn=>{handler=fn;},close:()=>dom.window.close()};
+  assert.deepEqual(errors, [], 'production script errors');
+  return {
+    dom,
+    w: dom.window,
+    d: dom.window.document,
+    state,
+    calls,
+    timers,
+    setHandler: (fn) => (handler = fn),
+    close: () => dom.window.close(),
+  };
 }
-test('production-rendered English first paint has localized static text before JavaScript',()=>{
-  const page=new JSDOM(rendered('en'));
-  try {
-    const d=page.window.document;
-    assert.equal(d.documentElement.lang,'en');
-    assert.equal(d.title,'warpd — proxy management');
-    assert.equal(d.getElementById('connection').textContent,'Connecting…');
-    assert.equal(d.getElementById('updated').textContent,'Waiting for status');
-    assert.equal(d.getElementById('token').placeholder,'API token');
-    assertEnglishDOM(d);
-  }finally{page.window.close();}
+function edit(app, id, value) {
+  const n = app.d.getElementById(id);
+  assert.ok(n, 'missing ' + id);
+  if (n.type === 'checkbox') n.checked = value;
+  else n.value = value;
+  n.dispatchEvent(new app.w.Event('input', { bubbles: true }));
+  n.dispatchEvent(new app.w.Event('change', { bubbles: true }));
+  n.blur();
+  return n;
+}
+function submit(app, id) {
+  app.d
+    .getElementById(id)
+    .dispatchEvent(
+      new app.w.Event('submit', { bubbles: true, cancelable: true }),
+    );
+}
+function english(d) {
+  const b = d.body.cloneNode(true);
+  b.querySelectorAll('script').forEach((x) => x.remove());
+  assert.doesNotMatch(b.textContent, /[А-Яа-яЁё]/);
+  for (const n of d.querySelectorAll('[aria-label],[placeholder],[title]'))
+    for (const a of ['aria-label', 'placeholder', 'title'])
+      assert.doesNotMatch(n.getAttribute(a) || '', /[А-Яа-яЁё]/);
+}
+
+test('Relay manual credentials use exact write-only API and honest persisted-unavailable status in EN/RU', async () => {
+  for (const language of ['en', 'ru']) {
+    let account = relayAccountState();
+    const a = await mount({ language, state: withRelayProfile(), handler: (p, o, s) => {
+      if (p !== '/api/profiles/p-relay/account') return;
+      if (o.method === 'PUT') {
+        account = relayAccountState({ credential_mode: 'manual', credential_configured: true });
+        Object.assign(s.profiles.find(p => p.id === 'p-relay'), {
+          credential_mode: 'manual', credential_configured: true });
+        s.revision++;
+        return response({ persisted: true, applied: false, runtime_available: false });
+      }
+      return response(account);
+    }});
+    try {
+      a.w.confirm = () => true;
+      const disclosure = a.d.getElementById('p-relay-account');
+      assert.ok(disclosure, 'Relay row needs an account disclosure');
+      disclosure.open = true;
+      disclosure.dispatchEvent(new a.w.Event('toggle'));
+      await settle();
+      assert.equal(a.d.getElementById('p-a-account'), null);
+      edit(a, 'p-relay-account-mode', 'manual');
+      const values = { private_key: 'SYNTHETIC_PRIVATE_ONLY', peer_public_key: 'SYNTHETIC_SERVER_PEER_ONLY',
+        tunnel_ipv4: '192.0.2.27/32', tunnel_ipv6: '2001:db8::27/128',
+        reserved: 'AAAA', dns: '192.0.2.53,2001:db8::53', mtu: '1400' };
+      for (const [key, value] of Object.entries(values)) edit(a, 'p-relay-account-' + key, value);
+      for (const key of ['private_key', 'peer_public_key']) {
+        const input = a.d.getElementById('p-relay-account-' + key);
+        assert.equal(input.type, 'password');
+        assert.equal(input.autocomplete, 'new-password');
+      }
+      assert.match(a.d.querySelector('label[for=p-relay-account-peer_public_key]').textContent,
+        language === 'en' ? /server.*\[Peer\].*not.*client/i : /сервера.*\[Peer\].*не.*клиента/i);
+      await a.w.refresh();
+      assert.equal(a.d.getElementById('p-relay-account-private_key').value, values.private_key);
+      submit(a, 'p-relay-account-form');
+      await settle();
+      const writes = a.calls.filter(c => c.method === 'PUT');
+      assert.equal(writes.length, 1);
+      assert.deepEqual(writes[0].body, { mode: 'manual', ...values, mtu: 1400 });
+      assert.equal(writes[0].path, '/api/profiles/p-relay/account');
+      assert.equal(writes[0].headers['Content-Type'], 'application/json');
+      for (const key of Object.keys(values)) assert.equal(a.d.getElementById('p-relay-account-' + key).value, '');
+      const text = a.d.getElementById('p-relay-account-status').textContent;
+      assert.match(text, language === 'en' ? /Saved.*does not apply.*network and policy/i : /Сохранено.*не применяет.*сети и политики/i);
+      assert.doesNotMatch(text, /SYNTHETIC|192\.0\.2|2001:db8/);
+      assert.match(a.d.getElementById('p-relay-error').textContent, /Relay runtime unavailable/);
+      assert.equal(a.calls.filter(c => /generate|register|activate/.test(c.path) && c.method !== 'GET').length, 0);
+      assert.equal(a.w.localStorage.length, 0);
+      assert.doesNotMatch(a.w.location.href, /SYNTHETIC/);
+      if (language === 'en') english(a.d);
+    } finally { a.close(); }
+  }
 });
 
-test('production-rendered English startup widgets stay English while status is pending',async()=>{
-  let release;const gate=new Promise(resolve=>{release=resolve;});
-  const app=await mount({html:rendered('en'),handler:async p=>p==='/api/status'?gate:null});
-  try {
-    assert.equal(app.d.getElementById('warp-toggle').disabled,true);
-    assert.equal(app.d.getElementById('connection').textContent,'Connecting…');
-    assert.equal(app.d.querySelectorAll('[role="switch"]').length,4);
-    assert.equal(app.d.querySelectorAll('[data-config]').length,10);
-    assert.equal(app.d.getElementById('warp-epin').placeholder,'IP:port');
-    assert.equal(app.d.getElementById('m2w-toggle').getAttribute('aria-label'),'MASQUE → WARP: enable or disable');
-    assertEnglishDOM(app.d);
-  }finally{release(response(app.state));await settle();app.close();}
+test('Relay generation requires localized explicit confirmation, fresh revision, pending polling and safe cancellation', async () => {
+  for (const language of ['en', 'ru']) {
+    let account = relayAccountState(), queued = true;
+    const prompts = [];
+    const a = await mount({ language, state: withRelayProfile(), handler: (p, o, s) => {
+      if (p === '/api/profiles' && o.method === 'GET')
+        return response({ revision: s.revision, profiles: s.profiles, relays: s.relays, defaults: s.defaults });
+      if (p === '/api/profiles/p-relay/account') return response(account);
+      if (p === '/api/profiles/p-relay/account/generate') {
+        if (o.method === 'POST') {
+          account = relayAccountState({ state: 'pending', pending: true });
+          return response({ queued, state: 'pending', runtime_available: false }, 202);
+        }
+        if (o.method === 'DELETE') {
+          account = relayAccountState({ state: 'cancelled' });
+          return response(account);
+        }
+      }
+    }});
+    try {
+      const generate = a.d.getElementById('p-relay-account-generate');
+      assert.ok(generate, 'explicit generation action missing');
+      assert.equal(a.d.getElementById('p-relay-account-private_key').disabled, true);
+      a.w.confirm = text => { prompts.push(text); return false; };
+      generate.click(); await settle();
+      assert.equal(a.calls.filter(c => c.method === 'POST' && c.path.endsWith('/generate')).length, 0);
+      assert.match(prompts[0], language === 'en' ? /register.*NEW.*replace.*not.*activation/i : /НОВЫЙ.*замен.*не.*активация/i);
+      a.state.revision = 17; // newer than the rendered status; fresh GET must win.
+      a.w.confirm = () => true;
+      generate.click(); generate.click(); await settle();
+      let writes = a.calls.filter(c => c.method === 'POST' && c.path.endsWith('/generate'));
+      assert.equal(writes.length, 1);
+      assert.deepEqual(writes[0].body, { confirmed: true, revision: 17 });
+      assert.equal(generate.disabled, true);
+      assert.equal(a.d.getElementById('p-relay-account-cancel').disabled, false);
+      assert.match(a.d.getElementById('p-relay-account-status').textContent, language === 'en' ? /Registration.*pending/i : /Регистрация.*выполняется/i);
+      // Poll completion never resubmits or enables/applies a tunnel.
+      account = relayAccountState({ state: 'succeeded', credential_mode: 'generated', credential_configured: true });
+      a.state.revision++;
+      for (const fn of a.timers) fn(); await settle();
+      assert.equal(generate.disabled, false);
+      assert.match(a.d.getElementById('p-relay-account-status').textContent, language === 'en' ? /saved.*does not apply.*network and policy/i : /сохран.*не применяет.*сети и политики/i);
+      queued = false;
+      generate.click(); await settle();
+      writes = a.calls.filter(c => c.method === 'POST' && c.path.endsWith('/generate'));
+      assert.equal(writes.length, 2);
+      assert.deepEqual(writes[1].body, { confirmed: true, revision: 18 });
+      assert.match(a.d.getElementById('p-relay-account-status').textContent, language === 'en' ? /already pending.*not queued/i : /уже выполняется.*не добавлен/i);
+      a.d.getElementById('p-relay-account-cancel').click(); await settle();
+      const cancel = a.calls.find(c => c.method === 'DELETE' && c.path.endsWith('/generate'));
+      assert.deepEqual(cancel.body, {});
+      assert.match(a.d.getElementById('p-relay-account-status').textContent, language === 'en' ? /Cancelled.*provider/i : /Отменено.*провайдер/i);
+      assert.equal(a.calls.filter(c => /activate|register/.test(c.path) && c.method !== 'GET').length, 0);
+      if (language === 'en') english(a.d);
+    } finally { a.close(); }
+  }
 });
 
-test('production-rendered English status translates readiness details and date locale without changing codes',async()=>{
-  const app=await mount({html:rendered('en')});
+test('Relay account readback failure cannot masquerade as a successful save and newer drafts survive', async () => {
+  let release;
+  let failReadback = false;
+  const a = await mount({ language: 'en', state: withRelayProfile(), handler: (p, o) => {
+    if (p !== '/api/profiles/p-relay/account') return;
+    if (o.method === 'PUT') return new Promise(r => { release = r; });
+    return failReadback ? response({ error: 'SYNTHETIC_PRIVATE_OLD<img src=x onerror=alert(1)>' }, 500)
+      : response(relayAccountState());
+  }});
   try {
-    assert.equal(app.d.getElementById('connection').textContent,'Connected to server');
-    assert.equal(app.d.getElementById('warp-toggle-label').textContent,'On');
-    assert.equal(app.d.getElementById('warp-policy').textContent,'Policy: suitable');
-    assert.equal(app.d.getElementById('warp-ip-country').textContent,'DE');
-    const iso='2026-10-18T08:09:00Z';
-    assert.equal(app.w.fmtTime(iso),new app.w.Date(iso).toLocaleString('en-US'));
-    assertEnglishDOM(app.d);
-    app.state.proxies.warp.enabled=false;app.state.proxies.m2w.foreign_ip_verified=false;
-    app.state.proxies.masque.transport_ready=false;app.state.proxies.masqueh2.checking=true;
-    await app.w.refresh();
-    assert.equal(app.d.getElementById('warp-toggle-label').textContent,'Off');
-    assert.notEqual(app.d.getElementById('m2w-policy').className,'ok');
-    assertEnglishDOM(app.d);
-    app.state.proxies.warp.applied_enabled=false;
-    app.state.proxies.warp.manual_endpoint=true;app.state.proxies.masque.running=false;
-    await app.w.refresh();assertEnglishDOM(app.d);
-  }finally{app.close();}
+    a.w.confirm = () => true;
+    edit(a, 'p-relay-account-mode', 'manual');
+    edit(a, 'p-relay-account-private_key', 'SYNTHETIC_PRIVATE_OLD');
+    edit(a, 'p-relay-account-peer_public_key', 'SYNTHETIC_PEER_OLD');
+    edit(a, 'p-relay-account-tunnel_ipv4', '192.0.2.1');
+    submit(a, 'p-relay-account-form'); await settle();
+    assert.ok(release);
+    edit(a, 'p-relay-account-private_key', 'SYNTHETIC_PRIVATE_NEW');
+    edit(a, 'p-relay-account-dns', '192.0.2.53');
+    failReadback = true;
+    release(response({ persisted: true, applied: false, runtime_available: false }));
+    await settle();
+    assert.equal(a.d.getElementById('p-relay-account-private_key').value, 'SYNTHETIC_PRIVATE_NEW');
+    assert.equal(a.d.getElementById('p-relay-account-peer_public_key').value, '');
+    assert.equal(a.d.getElementById('p-relay-account-dns').value, '192.0.2.53');
+    assert.ok(a.calls.some(c => c.path.endsWith('/account') && c.method === 'GET'), 'must verify saved account endpoint');
+    assert.match(a.d.getElementById('p-relay-account-status').textContent, /Saved.*status.*unavailable/i);
+    assert.doesNotMatch(a.d.getElementById('p-relay-account-status').textContent, /SYNTHETIC|<img/);
+    assert.equal(a.d.querySelector('#p-relay-account-status img'), null);
+  } finally { a.close(); }
 });
 
-for(const language of ['en','ru'])test(`production ${language} pending/failed toggles stay truthful and localize offline/auth errors`,async()=>{
-  const en=language==='en',app=await mount({html:rendered(language)});let release;
+test('Relay manual replacement still confirms when cached account status predates configured profile metadata', async () => {
+  const a = await mount({ language: 'en', state: withRelayProfile(), handler: (p, o) => {
+    if (p.endsWith('/account') && o.method === 'GET') return response(relayAccountState());
+  }});
   try {
-    const gate=new Promise(resolve=>{release=resolve;});
-    app.setHandler(async p=>p==='/api/proxy'?gate:null);
-    const sw=app.d.getElementById('warp-toggle');sw.click();await settle();
-    assert.equal(sw.getAttribute('aria-checked'),'true');
-    assert.equal(app.d.getElementById('warp-toggle-label').textContent,en?'Applying…':'Применяем…');
-    assert.equal(sw.title,en?'Wait for the current request to finish':'Дождитесь завершения текущего запроса');
-    release(response({applied:true}));await settle();
-    assert.equal(sw.getAttribute('aria-checked'),'true');
-    assert.match(app.d.getElementById('warp-feedback').textContent,en?/not confirmed/:/не подтверждено/);
-    assert.notEqual(app.d.getElementById('warp-policy').className,'ok');
-    if(en)assertEnglishDOM(app.d);
-    app.setHandler(async p=>{if(p==='/api/status')throw new Error('offline');});await app.w.refresh();
-    assert.equal(app.d.getElementById('message').textContent,en?'No connection to server':'Нет связи с сервером');
-    assert.equal(sw.disabled,true);
-    if(en)assertEnglishDOM(app.d);
-    app.setHandler(async p=>p==='/api/status'?response({error:'unauthorized'},401):null);await app.w.refresh();
-    assert.equal(app.d.getElementById('auth').hidden,false);
-    assert.equal(app.d.getElementById('connection').textContent,en?'Token required':'Требуется токен');
-    assert.equal(app.d.getElementById('message').textContent,en?'Access denied: check the API token':'Нет доступа: проверьте токен API');
-    app.d.getElementById('token').value=String(Math.random());
-    app.d.getElementById('auth-form').dispatchEvent(new app.w.Event('submit',{cancelable:true,bubbles:true}));await settle();
-    assert.equal(app.d.getElementById('auth-error').textContent,en?'Could not connect. Check the token and server availability.':'Не удалось подключиться. Проверьте токен и доступность сервера.');
-    if(en)assertEnglishDOM(app.d);
-  }finally{app.close();}
+    await a.w.pollAccount('p-relay');
+    Object.assign(a.state.profiles.find(p => p.id === 'p-relay'), { credential_mode: 'generated', credential_configured: true });
+    await a.w.refresh();
+    edit(a, 'p-relay-account-mode', 'manual');
+    edit(a, 'p-relay-account-private_key', 'SYNTHETIC_REPLACE_PRIVATE');
+    edit(a, 'p-relay-account-peer_public_key', 'SYNTHETIC_REPLACE_PEER');
+    edit(a, 'p-relay-account-tunnel_ipv4', '192.0.2.2');
+    let prompt = '';
+    a.w.confirm = text => { prompt = text; return false; };
+    submit(a, 'p-relay-account-form'); await settle();
+    assert.match(prompt, /Replace.*keys.*shared account.*activation/i);
+    assert.equal(a.calls.filter(c => c.method === 'PUT').length, 0);
+    assert.equal(a.d.getElementById('p-relay-account-private_key').value, 'SYNTHETIC_REPLACE_PRIVATE');
+  } finally { a.close(); }
 });
 
-for(const language of ['en','ru'])test(`production ${language} scanner queue/progress/timeout wording preserves async truth`,async()=>{
-  const en=language==='en',app=await mount({html:rendered(language),handler:async p=>p==='/api/scan'?response({queued:true}):null});
+test('Relay secret drafts edited away and back during save retain their newer edit version', async () => {
+  let release;
+  const a = await mount({ language: 'en', state: withRelayProfile(), handler: (p, o) => {
+    if (!p.endsWith('/account')) return;
+    if (o.method === 'PUT') return new Promise(r => { release = r; });
+    return response(relayAccountState({ credential_mode: 'manual', credential_configured: true }));
+  }});
   try {
-    app.d.getElementById('scan-btn').click();await settle();
-    assert.match(app.d.getElementById('scan-state').textContent,en?/Queued/:/очередь/);
-    assert.match(app.d.getElementById('message').textContent,en?/queued/:/очередь/);
-    assert.equal(app.d.getElementById('warp-toggle').disabled,true);
-    if(en)assertEnglishDOM(app.d);
-    const now=app.w.Date.now;app.w.Date.now=()=>now()+21000;app.w.renderAll();
-    assert.match(app.d.getElementById('message').textContent,en?/not confirmed within 20 seconds/:/не подтверждён за 20 секунд/);
-    app.w.Date.now=now;
-    app.state.scan={scanning:true,for:'warp',started:new Date(Date.now()-65000).toISOString(),reason:'manual',log:['raw scan line'],last_result:'raw result'};
-    await app.w.refresh();
-    assert.match(app.d.getElementById('scan-state').textContent,en?/Searching · WARP · 1 min \d+ s · manual/:/Идёт поиск · WARP · 1 мин \d+ с · manual/);
-    assert.equal(app.d.getElementById('scan-btn').textContent,en?'Search: please wait…':'Поиск: ожидайте…');
-    assert.equal(app.d.getElementById('scan-log').textContent,'raw scan line');
-    assert.equal(app.d.getElementById('restart-btn').disabled,true);
-    if(en)assertEnglishDOM(app.d);
-    app.state.scan.scanning=false;app.state.scan.last_scan=new Date().toISOString();await app.w.refresh();
-    app.setHandler(async p=>p==='/api/scan'?response({queued:false}):null);
-    app.d.getElementById('scan-btn').click();await settle();
-    assert.match(app.d.getElementById('message').textContent,en?/not accepted/:/не принят/);
-    if(en)assertEnglishDOM(app.d);
-  }finally{app.close();}
+    a.w.confirm = () => true;
+    edit(a, 'p-relay-account-mode', 'manual');
+    edit(a, 'p-relay-account-private_key', 'SYNTHETIC_DRAFT_SAME');
+    edit(a, 'p-relay-account-peer_public_key', 'SYNTHETIC_PEER');
+    edit(a, 'p-relay-account-tunnel_ipv4', '192.0.2.2');
+    submit(a, 'p-relay-account-form'); await settle();
+    edit(a, 'p-relay-account-private_key', 'SYNTHETIC_DRAFT_OTHER');
+    edit(a, 'p-relay-account-private_key', 'SYNTHETIC_DRAFT_SAME');
+    release(response({ persisted: true, applied: false, runtime_available: false })); await settle();
+    assert.equal(a.d.getElementById('p-relay-account-private_key').value, 'SYNTHETIC_DRAFT_SAME');
+    assert.equal(a.d.getElementById('p-relay-account-peer_public_key').value, '');
+  } finally { a.close(); }
 });
 
-for(const language of ['en','ru'])test(`production ${language} confirmations and shared-operation feedback are localized`,async()=>{
-  const en=language==='en',app=await mount({html:rendered(language)});
+test('Relay manual save always confirms replacement intent even when cached metadata is unconfigured', async () => {
+  const a = await mount({ language: 'en', state: withRelayProfile() });
   try {
-    const prompts=[];app.w.confirm=text=>{prompts.push(text);return false;};
-    for(const id of ['restart-btn','rotate-btn','newaccount-btn']){app.d.getElementById(id).click();await settle();}
-    assert.equal(app.calls.filter(c=>c.method==='POST').length,0);
-    assert.equal(prompts.length,3);
-    assert.match(prompts[0],en?/all four services/:/всех четырёх сервисов/);
-    assert.match(prompts[1],en?/Rotate the shared account keys/:/Обновить ключи общего аккаунта/);
-    assert.match(prompts[2],en?/Replace the current shared account/:/Создать новый общий аккаунт/);
-    if(en)for(const prompt of prompts)assert.doesNotMatch(prompt,/[А-Яа-яЁё]/);
-    app.w.confirm=()=>true;
-    for(const id of ['restart-btn','rotate-btn','newaccount-btn']){
-      app.d.getElementById(id).click();await settle();
-      assert.match(app.d.getElementById('message').textContent,en?/request accepted/:/Запрос .* принят/);
-      assert.doesNotMatch(app.d.getElementById('message').textContent,en?/successfully|account created/:/успешно|аккаунт создан/);
-      if(en)assertEnglishDOM(app.d);
+    edit(a, 'p-relay-account-mode', 'manual');
+    edit(a, 'p-relay-account-private_key', 'SYNTHETIC_CONFIRM_PRIVATE');
+    edit(a, 'p-relay-account-peer_public_key', 'SYNTHETIC_CONFIRM_PEER');
+    edit(a, 'p-relay-account-tunnel_ipv4', '192.0.2.3');
+    let prompt = '';
+    a.w.confirm = text => { prompt = text; return false; };
+    submit(a, 'p-relay-account-form'); await settle();
+    assert.match(prompt, /Replace.*keys.*shared account.*activation/i);
+    assert.equal(a.calls.filter(c => c.method === 'PUT').length, 0);
+  } finally { a.close(); }
+});
+
+for (const language of ['en', 'ru']) {
+  test(language + ' Relay account rejection matrix keeps secrets/drafts and action errors through polls without XSS', async () => {
+    for (const code of [400, 401, 403, 404, 409, 500, 503]) {
+      const a = await mount({ language, state: withRelayProfile(), url: 'http://console.test/?secret=SYNTHETIC_API_TOKEN', handler: (p, o) => {
+        if (p.endsWith('/account')) return o.method === 'PUT'
+          ? response({ error: 'SYNTHETIC_PRIVATE<img src=x onerror=alert(1)>', persisted: false, applied: false }, code)
+          : response(relayAccountState());
+      }});
+      try {
+        a.w.confirm = () => true;
+        edit(a, 'p-relay-account-mode', 'manual');
+        edit(a, 'p-relay-account-private_key', 'SYNTHETIC_PRIVATE');
+        edit(a, 'p-relay-account-peer_public_key', 'SYNTHETIC_PEER');
+        edit(a, 'p-relay-account-tunnel_ipv4', '192.0.2.4');
+        submit(a, 'p-relay-account-form'); await settle();
+        const sent = a.calls.find(c => c.method === 'PUT');
+        assert.deepEqual(sent.body, { mode: 'manual', private_key: 'SYNTHETIC_PRIVATE', peer_public_key: 'SYNTHETIC_PEER', tunnel_ipv4: '192.0.2.4' });
+        assert.equal(sent.headers.Authorization, 'Bearer SYNTHETIC_API_TOKEN');
+        const text = a.d.getElementById('p-relay-account-status').textContent;
+        assert.ok(text);
+        if (code === 401) assert.match(text, language === 'en' ? /token/i : /токен/i);
+        else if (code === 403) assert.match(text, /Origin/);
+        else assert.match(text, language === 'en' ? /Could not update/ : /Не удалось/);
+        await a.w.pollAccount('p-relay'); await a.w.refresh();
+        assert.equal(a.d.getElementById('p-relay-account-status').textContent, text, 'successful poll must not erase failed action');
+        assert.equal(a.d.getElementById('p-relay-account-private_key').value, 'SYNTHETIC_PRIVATE');
+        assert.equal(a.d.getElementById('p-relay-account-peer_public_key').value, 'SYNTHETIC_PEER');
+        assert.equal(a.d.querySelector('#p-relay-account-status img'), null);
+        assert.doesNotMatch(a.d.body.textContent, /SYNTHETIC_PRIVATE|SYNTHETIC_PEER/);
+        assert.doesNotMatch(a.w.location.href, /secret=|SYNTHETIC/);
+        assert.equal(a.w.localStorage.length, 0);
+        assert.equal(a.calls.filter(c => /generate|register|activate/.test(c.path) && c.method !== 'GET').length, 0);
+        if (language === 'en') english(a.d);
+      } finally { a.close(); }
     }
-  }finally{app.close();}
+  });
+  test(language + ' Relay account states are localized safe DTOs; old/malformed metadata cannot invent readiness or fields', async () => {
+    let dto = relayAccountState();
+    const s = withRelayProfile();
+    delete s.profiles.at(-1).credential_mode;
+    delete s.profiles.at(-1).credential_configured;
+    const a = await mount({ language, state: s, handler: (p) => {
+      if (p.endsWith('/account')) return response(dto);
+    }});
+    try {
+      assert.match(a.d.getElementById('p-relay-account-status').textContent, language === 'en' ? /not configured/ : /не настроены/);
+      for (const state of ['idle', 'pending', 'succeeded', 'error', 'cancelled', 'stale']) {
+        dto = relayAccountState({ state, pending: state === 'pending',
+          credential_mode: 'generated', credential_configured: true,
+          private_key: 'SYNTHETIC_RETURNED_PRIVATE', peer_public_key: 'SYNTHETIC_RETURNED_PEER',
+          tunnel_ipv4: '192.0.2.7', dns: '192.0.2.53', error: state === 'error' ? 'Relay account generation failed' : undefined });
+        await a.w.pollAccount('p-relay');
+        const text = a.d.getElementById('p-relay-account-status').textContent;
+        assert.match(text, language === 'en' ? /network and policy status/ : /статусах сети и политики/);
+        if (state === 'error') assert.match(text, language === 'en' ? /Registration failed/ : /Регистрация не удалась/);
+        if (state === 'stale') assert.match(text, language === 'en' ? /discarded/ : /отброшен/);
+        for (const key of ['private_key', 'peer_public_key', 'tunnel_ipv4', 'dns'])
+          assert.equal(a.d.getElementById('p-relay-account-' + key).value, '');
+        assert.doesNotMatch(text, /SYNTHETIC|192\.0\.2/);
+      }
+      dto = { state: '<img src=x>', pending: true, credential_mode: 'manual', credential_configured: true, runtime_available: true };
+      await a.w.pollAccount('p-relay');
+      assert.match(a.d.getElementById('p-relay-account-status').textContent, language === 'en' ? /Could not/ : /Не удалось/);
+      assert.equal(a.d.querySelector('#p-relay-account-status img'), null);
+      if (language === 'en') english(a.d);
+    } finally { a.close(); }
+  });
+}
+
+test('Relay cancellation supersedes a stale pending poll and does not delete credentials or auto-retry', async () => {
+  let release;
+  const a = await mount({ language: 'en', state: withRelayProfile(), handler: (p, o) => {
+    if (p.endsWith('/account')) return response(relayAccountState({ state: 'pending', pending: true, credential_mode: 'manual', credential_configured: true }));
+    if (p.endsWith('/account/generate') && o.method === 'DELETE') return response(relayAccountState({ state: 'cancelled', credential_mode: 'manual', credential_configured: true }));
+  }});
+  try {
+    await a.w.pollAccount('p-relay');
+    a.setHandler((p, o) => {
+      if (p.endsWith('/account')) return new Promise(r => { release = r; });
+      if (p.endsWith('/account/generate') && o.method === 'DELETE') return response(relayAccountState({ state: 'cancelled', credential_mode: 'manual', credential_configured: true }));
+    });
+    const old = a.w.pollAccount('p-relay'); await settle();
+    a.d.getElementById('p-relay-account-cancel').click(); await settle();
+    release(response(relayAccountState({ state: 'pending', pending: true }))); await old;
+    assert.match(a.d.getElementById('p-relay-account-status').textContent, /Cancelled.*Existing credentials were not deleted/);
+    assert.equal(a.d.getElementById('p-relay-account-generate').disabled, false);
+    assert.equal(a.calls.filter(c => c.method === 'POST').length, 0);
+  } finally { a.close(); }
 });
 
-for(const language of ['en','ru'])test(`production ${language} settings preserve dirty forms and localize verified saves`,async()=>{
-  const en=language==='en',app=await mount({html:rendered(language)});
+test('Relay generation conflicts/auth/origin/unavailable responses never queue retries and invalid revision never posts', async () => {
+  for (const code of [400, 401, 403, 404, 409, 503]) {
+    const a = await mount({ language: 'en', state: withRelayProfile(), handler: (p, o, s) => {
+      if (p === '/api/profiles' && o.method === 'GET') return response({ revision: s.revision, profiles: s.profiles });
+      if (p.endsWith('/generate')) return response({ error: '<img src=x> SYNTHETIC_GENERATION_ERROR' }, code);
+    }});
+    try {
+      a.w.confirm = () => true;
+      a.d.getElementById('p-relay-account-generate').click(); await settle();
+      for (const fn of a.timers) fn(); await settle();
+      assert.equal(a.calls.filter(c => c.path.endsWith('/generate') && c.method === 'POST').length, 1);
+      const text = a.d.getElementById('p-relay-account-status').textContent;
+      assert.doesNotMatch(text, /SYNTHETIC|<img|saved|queued/i);
+      assert.ok(text);
+      assert.equal(a.d.querySelector('#p-relay-account-status img'), null);
+    } finally { a.close(); }
+  }
+  const a = await mount({ language: 'en', state: withRelayProfile(), handler: (p, o) => {
+    if (p === '/api/profiles' && o.method === 'GET') return response({ revision: 0, profiles: [] });
+  }});
   try {
-    const field=app.d.getElementById('cfg-check_period');field.value='45';field.dispatchEvent(new app.w.Event('input',{bubbles:true}));field.blur();
-    assert.equal(app.d.getElementById('config-state').textContent,en?'Unsaved fields: 1':'Несохранённых полей: 1');
-    app.state.config.check_period=60;await app.w.refresh();assert.equal(field.value,'45');
-    let release;const gate=new Promise(resolve=>{release=resolve;});app.setHandler(async p=>p==='/api/config'?gate:null);
-    app.d.getElementById('save-config').click();await settle();
-    assert.equal(app.d.getElementById('message').textContent,en?'Sending request…':'Выполняется запрос…');
-    if(en)assertEnglishDOM(app.d);
-    app.state.config.check_period=45;release(response({applied:['check_period']}));await settle();
-    assert.equal(app.d.getElementById('message').textContent,en?'Settings saved and confirmed by server.':'Настройки сохранены и подтверждены сервером.');
-    assert.equal(app.d.getElementById('config-state').textContent,en?'No changes':'Нет изменений');
-    app.setHandler(async p=>p==='/api/config'?response({error:'raw backend error'},400):null);
-    field.value='50';field.dispatchEvent(new app.w.Event('input',{bubbles:true}));app.d.getElementById('save-config').click();await settle();
-    assert.equal(field.value,'50');assert.match(app.d.getElementById('message').textContent,/raw backend error/);
-    if(en)assertEnglishDOM(app.d);
-    app.setHandler(null);app.d.getElementById('save-config').click();await settle();
-    assert.match(app.d.getElementById('message').textContent,en?/Not all edits were confirmed/:/Не все правки подтверждены/);
-    assert.equal(field.value,'50');
-    app.d.getElementById('reset-config').click();assert.equal(field.value,'45');
-    if(en)assertEnglishDOM(app.d);
-  }finally{app.close();}
+    a.w.confirm = () => true;
+    a.d.getElementById('p-relay-account-generate').click(); await settle();
+    assert.equal(a.calls.filter(c => c.method === 'POST').length, 0);
+  } finally { a.close(); }
 });
 
-for(const language of ['en','ru'])test(`production ${language} redacts credentials while raw diagnostics stay inert and untranslated`,async()=>{
-  const value=String(Math.random()),en=language==='en';
-  const app=await mount({html:rendered(language),url:'http://console.test/?secret='+encodeURIComponent(value)+'&keep=1'});
-  try {
-    const raw='исходная диагностика <img src=x onerror=alert(1)> Bearer '+value+' ?secret='+value;
-    app.state.scan.log=[raw];app.state.scan.reason='backend_reason';
-    app.state.proxies.warp.error=raw;app.state.proxies.warp.policy_error=raw;
-    app.state.proxies.warp.exit_info=raw;
-    await app.w.refresh();
-    assert.equal(app.w.location.search,'?keep=1');
-    assert.equal(app.w.localStorage.length,0);assert.equal(app.w.sessionStorage.length,0);
-    assert.ok(app.calls.every(c=>!c.path.includes(value)));
-    for(const id of ['scan-log','warp-error','warp-policy-error','warp-exit']){
-      const node=app.d.getElementById(id);
-      assert.ok(!node.textContent.includes(value));
-      assert.match(node.textContent,/исходная диагностика <img/);
-      assert.match(node.textContent,en?/\[redacted\]/:/\[скрыто\]/);
-      assert.equal(node.querySelector('img'),null);
+if (process.env.WARPD_ACCOUNT_DTO_FIXTURE) {
+  test('production backend serialized account/profile DTO fixture runs through the complete production DOM', async () => {
+    const fixture = JSON.parse(fs.readFileSync(process.env.WARPD_ACCOUNT_DTO_FIXTURE, 'utf8'));
+    assert.deepEqual(fixture.account_idle, relayAccountState());
+    assert.deepEqual(fixture.manual_success, { persisted: true, applied: false, runtime_available: false });
+    for (const listing of [fixture.profiles_unconfigured, fixture.profiles_manual]) {
+      const s = { ...status(), ...listing };
+      s.proxies = Object.fromEntries(s.profiles.map(p => [p.id, {
+        ...p, running: false, ready: false, transport_ready: false,
+        policy_ready: false, error: p.type === 'relay-warp' ? 'Relay runtime unavailable' : '',
+      }]));
+      const relay = s.profiles.find(p => p.type === 'relay-warp');
+      for (const p of s.profiles) {
+        if (p.type === 'relay-warp') {
+          assert.equal(typeof p.credential_configured, 'boolean');
+          assert.equal(typeof p.credential_mode, 'string');
+        } else {
+          assert.equal('credential_mode' in p, false);
+          assert.equal('credential_configured' in p, false);
+        }
+      }
+      let dto = fixture.account_idle;
+      const a = await mount({ language: 'en', state: s, handler: p => p.endsWith('/account') ? response(dto) : undefined });
+      try {
+        for (const state of Object.keys(fixture.states)) {
+          dto = fixture.states[state];
+          await a.w.pollAccount(relay.id);
+          assert.equal(a.d.getElementById(relay.id + '-account-private_key').value, '');
+          assert.match(a.d.getElementById(relay.id + '-account-status').textContent, /Tunnel and exit readiness: see network and policy status/);
+        }
+        english(a.d);
+      } finally { a.close(); }
     }
-    app.setHandler(async p=>p==='/api/log'?response({lines:[raw]}):p==='/api/proxy'?response({error:raw},503):null);
-    await app.w.refreshLog();app.d.getElementById('warp-toggle').click();await settle();
-    assert.ok(!app.d.body.textContent.includes(value));
-    assert.match(app.d.getElementById('main-log').textContent,/исходная диагностика/);
-    assert.equal(app.d.getElementById('message').querySelector('img'),null);
-    assert.equal(app.d.getElementById('warp-toggle').getAttribute('aria-checked'),'true');
-  }finally{app.close();}
+  });
+}
+
+test('dynamic stable-ID profiles include multiple WARP instances and preserve intentional empty list', async () => {
+  const a = await mount();
+  try {
+    assert.equal(a.d.querySelectorAll('#services [role=switch]').length, 3);
+    assert.ok(a.d.getElementById('p-a-toggle'));
+    assert.ok(a.d.getElementById('p-b-toggle'));
+    assert.equal(a.d.getElementById('warp-toggle'), null);
+    a.state.profiles = [];
+    a.state.proxies = {};
+    await a.w.refresh();
+    assert.equal(a.d.querySelectorAll('#services [role=switch]').length, 0);
+    assert.equal(a.d.getElementById('empty-profiles').hidden, false);
+  } finally {
+    a.close();
+  }
 });
 
-for(const language of ['en','ru'])test(`production ${language} endpoint and clipboard feedback remains row-local`,async()=>{
-  const en=language==='en',app=await mount({html:rendered(language)});
+test('Relay monitor-only resources keep URL write-only, gate activation and pause children without changing saved choices', async () => {
+  const a = await mount();
   try {
-    app.d.getElementById('warp-epin').value='192.0.2.10:443';
-    app.d.getElementById('warp-apply').click();await settle();
-    assert.deepEqual(app.calls.filter(c=>c.path==='/api/endpoint').at(-1).body,{proxy:'warp',endpoint:'192.0.2.10:443'});
-    assert.match(app.d.getElementById('message').textContent,en?/Pin request for WARP accepted/:/Запрос закрепления WARP принят/);
-    if(en)assertEnglishDOM(app.d);
-    app.d.getElementById('masque-clearbtn').click();await settle();
-    assert.deepEqual(app.calls.filter(c=>c.path==='/api/endpoint/clear').at(-1).body,{proxy:'masque'});
-    assert.match(app.d.getElementById('message').textContent,en?/Automatic selection request for MASQUE accepted/:/Запрос автовыбора MASQUE принят/);
-    app.d.getElementById('warp-copy').click();await settle();
-    assert.equal(app.d.getElementById('message').textContent,en?'Could not copy. Select the address manually.':'Не удалось скопировать. Выделите адрес вручную.');
-    Object.defineProperty(app.w.navigator,'clipboard',{value:{writeText:async()=>{}}});
-    app.d.getElementById('warp-copy').click();await settle();
-    assert.equal(app.d.getElementById('message').textContent,en?'SOCKS address copied':'Адрес SOCKS скопирован');
-    if(en)assertEnglishDOM(app.d);
-  }finally{app.close();}
+    assert.equal(
+      a.d
+        .getElementById('new-profile-type')
+        .querySelector('option[value="relay-warp"]').disabled,
+      true,
+    );
+    edit(a, 'new-relay-name', 'Monitor');
+    edit(a, 'new-relay-url', 'https://de.tribukvy.ltd/test-only-credential');
+    submit(a, 'new-relay-form');
+    await settle();
+    const post = a.calls.find(
+      (c) => c.path === '/api/relays' && c.method === 'POST',
+    );
+    assert.ok(post);
+    assert.equal(post.body.enabled, false);
+    assert.equal(post.body.path_confirmed, false);
+    assert.equal(a.state.profiles.length, 3);
+    const r = a.state.relays[0];
+    assert.equal(a.d.getElementById('new-relay-url').value, '');
+    assert.equal(a.d.getElementById(r.id + '-url').value, '');
+    assert.ok(!a.d.body.textContent.includes('test-only-credential'));
+    assert.equal(a.d.getElementById(r.id + '-activate').disabled, true);
+    edit(a, r.id + '-name', 'Renamed');
+    submit(a, r.id + '-relay-form');
+    await settle();
+    const patch = a.calls
+      .filter((c) => c.path === '/api/relays/' + r.id)
+      .at(-1);
+    assert.deepEqual(patch.body, { name: 'Renamed' });
+    r.enabled = true;
+    const child = profile('child', 'relay-warp', {
+      port: 1090,
+      relay_id: r.id,
+      relay_country: 'DE',
+    });
+    a.state.profiles.push(child);
+    a.state.proxies.child = { ...child };
+    await a.w.refresh();
+    a.d.getElementById(r.id + '-toggle').click();
+    await settle();
+    assert.equal(r.enabled, false);
+    assert.equal(child.enabled, true);
+    assert.equal(
+      a.d.getElementById('child-toggle').getAttribute('aria-checked'),
+      'true',
+    );
+    assert.equal(a.d.getElementById('child-toggle').disabled, true);
+    assert.match(a.d.getElementById('child-transport').textContent, /Relay/);
+    a.d.getElementById(r.id + '-toggle').click();
+    await settle();
+    assert.equal(child.enabled, true);
+    assert.equal(a.d.getElementById('child-toggle').disabled, false);
+    a.w.confirm = () => true;
+    a.setHandler(async (p) =>
+      p === '/api/relays/' + r.id
+        ? response({ error: 'referenced' }, 409)
+        : null,
+    );
+    a.d.getElementById(r.id + '-delete').click();
+    await settle();
+    assert.match(a.d.getElementById('message').textContent, /referenced/);
+    assert.ok(a.state.relays.length);
+    a.setHandler(null);
+    edit(a, r.id + '-path_confirmed', true);
+    submit(a, r.id + '-relay-form');
+    await settle();
+    assert.equal(a.d.getElementById(r.id + '-activate').disabled, false);
+    const prompts = [];
+    a.w.confirm = (t) => {
+      prompts.push(t);
+      return false;
+    };
+    a.d.getElementById(r.id + '-activate').click();
+    await settle();
+    assert.equal(a.calls.filter((c) => c.path.endsWith('/activate')).length, 0);
+    assert.match(prompts[0], /IP|путь/);
+    a.w.confirm = () => true;
+    a.d.getElementById(r.id + '-activate').click();
+    await settle();
+    assert.equal(a.calls.filter((c) => c.path.endsWith('/activate')).length, 1);
+    assert.match(
+      a.d.getElementById(r.id + '-state').textContent,
+      /не подтвержд/,
+    );
+  } finally {
+    a.close();
+  }
 });
 
-for(const language of ['en','ru'])test(`production ${language} malformed, timed-out and stale status errors fail closed`,async()=>{
-  const en=language==='en',app=await mount({html:rendered(language)});
+for (const language of ['ru', 'en'])
+  test(
+    language +
+      ' mutations use exact profile contract, preserve drafts, and show persisted-but-unapplied truth',
+    async () => {
+      const a = await mount({ language });
+      try {
+        a.d.getElementById('p-a-toggle').click();
+        await settle();
+        assert.deepEqual(
+          a.calls.find((c) => c.path === '/api/profiles/p-a').body,
+          { enabled: false },
+        );
+        assert.equal(
+          a.d.getElementById('p-a-toggle').getAttribute('aria-checked'),
+          'false',
+        );
+        const sibling = edit(a, 'p-b-epin', '192.0.2.77:443');
+        edit(a, 'p-a-epin', '192.0.2.88:443');
+        a.d.getElementById('p-a-apply').click();
+        await settle();
+        assert.deepEqual(
+          a.calls.filter((c) => c.path === '/api/profiles/p-a').at(-1).body,
+          { endpoint: '192.0.2.88:443' },
+        );
+        assert.equal(sibling.value, '192.0.2.77:443');
+        a.d.getElementById('p-a-clearbtn').click();
+        await settle();
+        assert.deepEqual(
+          a.calls.filter((c) => c.path === '/api/profiles/p-a').at(-1).body,
+          { endpoint: '' },
+        );
+        a.setHandler(async (p, o, s) => {
+          if (p === '/api/profiles/p-a') {
+            const b = JSON.parse(o.body);
+            Object.assign(s.profiles[0], b);
+            Object.assign(s.proxies['p-a'], b, { transport_ready: false });
+            return response(
+              { persisted: true, applied: false, error: 'engine unavailable' },
+              503,
+            );
+          }
+        });
+        a.d.getElementById('p-a-toggle').click();
+        await settle();
+        assert.equal(
+          a.d.getElementById('p-a-toggle').getAttribute('aria-checked'),
+          'true',
+        );
+        assert.match(
+          a.d.getElementById('p-a-feedback').textContent,
+          /engine unavailable/,
+        );
+        assert.match(
+          a.d.getElementById('message').textContent,
+          language === 'en' ? /Saved, but/ : /Сохранено, но/,
+        );
+        assert.notEqual(a.d.getElementById('p-a-policy').className, 'ok');
+        edit(a, 'p-b-name', 'keep me');
+        a.setHandler(async (p) => {
+          if (p === '/api/status') throw new Error('offline');
+        });
+        await a.w.refresh();
+        assert.equal(a.d.getElementById('p-b-name').value, 'keep me');
+        assert.equal(a.d.getElementById('p-b-toggle').disabled, true);
+        assert.notEqual(a.d.getElementById('p-b-transport').className, 'ok');
+      } finally {
+        a.close();
+      }
+    },
+  );
+
+test('effective exclusions show union sources; policy separates HTTP-colo, public IP and independent legacy/Relay proof', async () => {
+  const s = status();
+  s.profiles[0].exclude_countries = 'BY';
+  s.profiles[0].exclude_nodes = 'FRA';
+  s.profiles[0].effective_exclude_nodes = 'DME,SVO,FRA';
+  s.profiles[0].effective_exclude_countries = 'RU,BY';
+  s.profiles.push(profile('legacy', 'legacy-m2w', { port: 1088 }));
+  s.proxies.legacy = {
+    ...s.proxies['p-b'],
+    foreign_ip_verified: false,
+    geo_country: 'DE',
+    geo_check: new Date().toISOString(),
+    geo_error: 'independent verification failed',
+  };
+  const a = await mount({ state: s });
   try {
-    const cases=[
-      [async()=>({ok:true,status:200,json:async()=>{throw new Error('malformed');}}),en?'Server returned an invalid response':'Сервер вернул некорректный ответ'],
-      [async()=>response(null),en?'Incomplete server response':'Неполный ответ сервера'],
-      [async()=>response({config:{},proxies:{}}),en?'Incomplete server status':'Неполный статус сервера'],
-      [async()=>{const error=new Error('timeout');error.name='AbortError';throw error;},en?'Server response timed out':'Сервер не ответил вовремя']
-    ];
-    for(const [handler,want] of cases){
-      app.setHandler(async p=>p==='/api/status'?handler():null);await app.w.refresh();
-      assert.equal(app.d.getElementById('message').textContent,want);
-      assert.equal(app.d.getElementById('warp-toggle').disabled,true);
-      assert.notEqual(app.d.getElementById('warp-policy').className,'ok');
-      if(en)assertEnglishDOM(app.d);
+    assert.match(
+      a.d.getElementById('p-a-effective-countries').textContent,
+      /RU.*глобальн.*BY.*локальн/,
+    );
+    assert.match(
+      a.d.getElementById('p-a-effective-nodes').textContent,
+      /FRA.*локальн/,
+    );
+    assert.notEqual(a.d.getElementById('p-a-policy').className, 'ok');
+    assert.equal(a.d.getElementById('p-b-policy').className, 'ok');
+    assert.equal(a.d.getElementById('p-b-ip-country').textContent, 'RU');
+    assert.notEqual(a.d.getElementById('legacy-policy').className, 'ok');
+    assert.match(a.d.getElementById('legacy-geo').textContent, /DE/);
+    assert.match(
+      a.d.getElementById('legacy-geo-error').textContent,
+      /independent verification failed/,
+    );
+    assert.match(a.d.getElementById('legacy-details').textContent, /миграция/);
+    assert.equal(
+      a.d
+        .getElementById('new-profile-type')
+        .querySelector('option[value="legacy-m2w"]'),
+      null,
+    );
+    for (const country of ['RU', '']) {
+      s.proxies['p-b'].exit_node_country = country;
+      await a.w.refresh();
+      assert.notEqual(a.d.getElementById('p-b-policy').className, 'ok');
     }
-    app.setHandler(null);await app.w.refresh();
-    const now=app.w.Date.now;app.w.Date.now=()=>now()+16000;app.timers.at(-1)();
-    assert.equal(app.d.getElementById('connection').textContent,en?'Status is stale':'Данные устарели');
-    assert.equal(app.d.getElementById('warp-toggle').disabled,true);
-    assert.equal(app.w.fmtTime('0001-01-01T00:00:00Z'),'—');
-    assert.equal(app.w.fmtTime('not-a-date'),'—');
-    assert.equal(app.w.fmtElapsed(-1),en?'0 min 0 s':'0 мин 0 с');
-    if(en)assertEnglishDOM(app.d);
-  }finally{app.close();}
+  } finally {
+    a.close();
+  }
 });
 
-test('fresh successful server checks recover a previous failed apply without stale error styling',async()=>{
-  const app=await mount();
+for (const language of ['ru', 'en'])
+  test(
+    language +
+      ' first paint, pending widgets, confirmations, ARIA and dates use production localization',
+    async () => {
+      const page = new JSDOM(rendered(language));
+      try {
+        assert.equal(page.window.document.documentElement.lang, language);
+        assert.equal(
+          page.window.document.title,
+          language === 'en'
+            ? 'warpd — proxy management'
+            : 'warpd — управление прокси',
+        );
+        if (language === 'en') english(page.window.document);
+      } finally {
+        page.window.close();
+      }
+      let release;
+      const gate = new Promise((r) => (release = r)),
+        a = await mount({
+          language,
+          handler: async (p) => (p === '/api/status' ? gate : null),
+        });
+      try {
+        assert.equal(a.d.getElementById('restart-btn').disabled, true);
+        assert.equal(a.d.querySelectorAll('#services [role=switch]').length, 0);
+        assert.equal(
+          a.d.getElementById('connection').textContent,
+          language === 'en' ? 'Connecting…' : 'Подключение…',
+        );
+        if (language === 'en') english(a.d);
+        release(response(a.state));
+        await settle();
+        if (language === 'en') english(a.d);
+        const iso = '2026-10-18T08:09:00Z';
+        assert.equal(
+          a.w.fmtTime(iso),
+          new a.w.Date(iso).toLocaleString(
+            language === 'en' ? 'en-US' : 'ru-RU',
+          ),
+        );
+        assert.match(
+          a.d.getElementById('p-a-toggle').getAttribute('aria-label'),
+          language === 'en' ? /enable or disable/ : /включить или выключить/,
+        );
+        const prompts = [];
+        a.w.confirm = (t) => {
+          prompts.push(t);
+          return false;
+        };
+        for (const id of [
+          'restart-btn',
+          'rotate-btn',
+          'newaccount-btn',
+          'p-a-delete',
+        ])
+          a.d.getElementById(id).click();
+        await settle();
+        assert.equal(prompts.length, 4);
+        assert.equal(a.calls.filter((c) => c.method !== 'GET').length, 0);
+        assert.match(
+          prompts[0],
+          language === 'en' ? /all.*profiles/ : /всех.*профил/,
+        );
+        if (language === 'en')
+          for (const p of prompts) assert.doesNotMatch(p, /[А-Яа-яЁё]/);
+        const cfg = edit(
+          a,
+          'cfg-web_language',
+          language === 'en' ? 'ru' : 'en',
+        );
+        submit(a, 'config-form');
+        await settle();
+        assert.equal(a.state.config.web_language, cfg.value);
+        assert.match(
+          a.d.getElementById('message').textContent,
+          language === 'en' ? /reload/i : /обновите/i,
+        );
+      } finally {
+        release(response(a.state));
+        a.close();
+      }
+    },
+  );
+
+test('poll races, pending double clicks, stale status and incomplete responses never invent readiness', async () => {
+  const a = await mount();
+  let release;
   try {
-    app.setHandler(async path=>{if(path==='/api/proxy')throw new Error('offline');});
-    app.d.getElementById('warp-toggle').click();await settle();
-    assert.equal(app.d.getElementById('warp-feedback').hidden,false);
-    app.state.proxies.warp.last_check=new Date(Date.now()+1000).toISOString();
-    await app.w.refresh();
-    assert.equal(app.d.getElementById('warp-feedback').hidden,true);
-    assert.equal(app.d.getElementById('warp-transport').className,'ok');
-  }finally{app.close();}
+    const before = clone(a.state),
+      gate = new Promise((r) => (release = r));
+    let once = true;
+    a.setHandler(async (p) => {
+      if (p === '/api/status' && once) {
+        once = false;
+        return gate;
+      }
+    });
+    const old = a.w.refresh();
+    await settle();
+    a.d.getElementById('p-a-toggle').click();
+    await settle();
+    assert.equal(
+      a.d.getElementById('p-a-toggle').getAttribute('aria-checked'),
+      'false',
+    );
+    release(response(before));
+    await old;
+    assert.equal(
+      a.d.getElementById('p-a-toggle').getAttribute('aria-checked'),
+      'false',
+    );
+    const applyGate = new Promise((r) => (release = r));
+    a.setHandler(async (p) => (p === '/api/profiles/p-b' ? applyGate : null));
+    const sw = a.d.getElementById('p-b-toggle');
+    sw.click();
+    await settle();
+    sw.click();
+    await a.w.refresh();
+    assert.equal(sw.getAttribute('aria-checked'), 'true');
+    assert.equal(sw.getAttribute('aria-busy'), 'true');
+    assert.equal(sw.disabled, true);
+    release(response({ persisted: false, applied: false }));
+    await settle();
+    assert.match(
+      a.d.getElementById('p-b-feedback').textContent,
+      /не подтверждено/,
+    );
+    assert.notEqual(a.d.getElementById('p-b-policy').className, 'ok');
+    a.setHandler(async (p) =>
+      p === '/api/status' ? response({ profiles: [], proxies: {} }) : null,
+    );
+    await a.w.refresh();
+    assert.equal(sw.disabled, true);
+    assert.notEqual(a.d.getElementById('p-b-policy').className, 'ok');
+    a.setHandler(null);
+    await a.w.refresh();
+    const now = a.w.Date.now;
+    a.w.Date.now = () => now() + 16000;
+    a.timers.at(-1)();
+    assert.equal(sw.disabled, true);
+    assert.notEqual(a.d.getElementById('p-a-transport').className, 'ok');
+    a.w.Date.now = now;
+  } finally {
+    a.close();
+  }
 });
 
-test('incomplete status fails closed instead of enabling missing service controls',async()=>{
-  const app=await mount();
+test('inline bearer recovery preserves dirty drafts; CSRF refusals explain origin rather than prompting for a token', async () => {
+  const token = String(Math.random()),
+    a = await mount({
+      language: 'en',
+      url: 'http://console.test/?secret=' + token + '&keep=1',
+    });
+  let release;
   try {
-    delete app.state.proxies.m2w;await app.w.refresh();
-    assert.equal(app.d.getElementById('warp-toggle').disabled,true);
-    assert.equal(app.d.getElementById('m2w-toggle').disabled,true);
-    assert.notEqual(app.d.getElementById('warp-policy').className,'ok');
-  }finally{app.close();}
-});
-test('a network-failed toggle never becomes an optimistic persisted switch',async()=>{
-  const app=await mount();
-  try {
-    app.setHandler(async path=>{if(path==='/api/proxy')throw new Error('offline');});
-    app.d.getElementById('warp-toggle').click();await settle();
-    assert.equal(app.d.getElementById('warp-toggle').getAttribute('aria-checked'),'true');
-    assert.match(app.d.getElementById('warp-feedback').textContent,/Ошибка/);
-    assert.notEqual(app.d.getElementById('warp-policy').className,'ok');
-  }finally{app.close();}
-});
-test('poll begun before a toggle cannot overwrite its authoritative readback',async()=>{
-  const app=await mount();let release;
-  try {
-    const oldState=clone(app.state);let block=true;const gate=new Promise(resolve=>{release=resolve;});
-    app.setHandler(async path=>{if(path==='/api/status'&&block){block=false;return gate;}});
-    const old=app.w.refresh();await settle();app.d.getElementById('warp-toggle').click();await settle();
-    assert.equal(app.d.getElementById('warp-toggle').getAttribute('aria-checked'),'false');
-    release(response(oldState));await old;
-    assert.equal(app.d.getElementById('warp-toggle').getAttribute('aria-checked'),'false');
-  }finally{app.close();}
-});
-test('HTTP success without matching status readback is not claimed as applied',async()=>{
-  const app=await mount({handler:async path=>path==='/api/proxy'?response({applied:true}):null});
-  try {
-    app.d.getElementById('warp-toggle').click();await settle();
-    assert.equal(app.d.getElementById('warp-toggle').getAttribute('aria-checked'),'true');
-    assert.match(app.d.getElementById('warp-feedback').textContent,/не подтверждено/i);
-  }finally{app.close();}
-});
-test('accepted-but-not-started scan remains queued with progress rather than completed',async()=>{
-  const app=await mount({handler:async path=>path==='/api/scan'?response({queued:true}):null});
-  try {
-    app.d.getElementById('scan-btn').click();await settle();
-    assert.match(app.d.getElementById('scan-state').textContent,/очередь/);
-    assert.equal(app.d.getElementById('scan-spinner').hidden,false);
-    assert.equal(app.d.getElementById('warp-toggle').disabled,true);
-    assert.doesNotMatch(app.d.getElementById('message').textContent,/завершён|успешно/i);
-  }finally{app.close();}
-});
-test('failed settings requests preserve unsaved data and do not show saved',async()=>{
-  const app=await mount({handler:async path=>path==='/api/config'?response({error:'invalid config'},400):null});
-  try {
-    const input=app.d.getElementById('cfg-exclude_countries');input.value='RU,KZ';input.dispatchEvent(new app.w.Event('input',{bubbles:true}));
-    app.d.getElementById('save-config').click();await settle();
-    assert.equal(input.value,'RU,KZ');assert.match(app.d.getElementById('config-state').textContent,/Несохранённых/);
-    assert.match(app.d.getElementById('message').textContent,/invalid config/);
-    app.d.getElementById('reset-config').click();assert.equal(input.value,'RU');
-  }finally{app.close();}
-});
-
-test('controls are disabled before the first status arrives',async()=>{
-  let release;const gate=new Promise(resolve=>{release=resolve;});
-  const app=await mount({handler:async path=>path==='/api/status'?gate:null});
-  try {
-    assert.equal(app.d.getElementById('warp-toggle').disabled,true);
-    assert.equal(app.d.getElementById('restart-btn').disabled,true);
-    release(response(app.state));await settle();
-    assert.equal(app.d.getElementById('warp-toggle').disabled,false);
-  }finally{release(response(app.state));app.close();}
-});
-test('obsolete authorization replies cannot lock out a newer token session',async()=>{
-  const app=await mount();let release;
-  try {
-    const gate=new Promise(resolve=>{release=resolve;});let block=true;
-    app.setHandler(async path=>{if(path==='/api/status'&&block){block=false;return gate;}});
-    const old=app.w.refresh();await settle();
-    // Generated test-only value, never written into fixtures or output.
-    app.d.getElementById('token').value=String(Math.random());
-    app.d.getElementById('auth-form').dispatchEvent(new app.w.Event('submit',{cancelable:true,bubbles:true}));await settle();
-    release(response({error:'unauthorized'},401));await old;
-    assert.equal(app.d.getElementById('auth').hidden,true);
-    assert.equal(app.d.getElementById('warp-toggle').disabled,false);
-    assert.equal(app.d.getElementById('token').value,'');
-  }finally{app.close();}
-});
-test('failed HTTP applies read back desired truth and retain visible row errors',async()=>{
-  const app=await mount({handler:async(path,opts,state)=>{if(path==='/api/proxy'){const body=JSON.parse(opts.body);state.proxies[body.proxy].enabled=body.enabled;state.proxies[body.proxy].transport_ready=false;return response({error:'apply failed',applied:false,desired_enabled:body.enabled},503);}}});
-  try {
-    app.d.getElementById('warp-toggle').click();await settle();
-    assert.equal(app.d.getElementById('warp-toggle').getAttribute('aria-checked'),'false');
-    assert.match(app.d.getElementById('warp-feedback').textContent,/apply failed/);
-    assert.equal(app.d.getElementById('warp-feedback').hidden,false);
-    assert.doesNotMatch(app.d.getElementById('warp-transport').className,/ok/);
-    assert.match(app.d.getElementById('warp-transport').textContent,/не подтверждено/);
-    assert.match(app.d.getElementById('message').textContent,/не удалось/i);
-  }finally{app.close();}
-});
-test('network disconnect and expired status remove green readiness and block writes',async()=>{
-  const app=await mount();
-  try {
-    assert.equal(app.d.getElementById('warp-transport').className,'ok');
-    app.setHandler(async path=>{if(path==='/api/status')throw new Error('offline');});await app.w.refresh();
-    for(const key of keys){assert.notEqual(app.d.getElementById(key+'-transport').className,'ok');assert.notEqual(app.d.getElementById(key+'-policy').className,'ok');assert.equal(app.d.getElementById(key+'-toggle').disabled,true);}
-    app.setHandler(null);await app.w.refresh();
-    const now=app.w.Date.now;app.w.Date.now=()=>now()+16000;
-    app.timers.at(-1)();
-    assert.equal(app.d.getElementById('restart-btn').disabled,true);
-    assert.notEqual(app.d.getElementById('warp-transport').className,'ok');
-  }finally{app.close();}
-});
-test('pending switch resists polling and double clicks and waits for server readback',async()=>{
-  const app=await mount();let release;
-  try {
-    const gate=new Promise(resolve=>{release=resolve;});
-    app.setHandler(async(path)=>path==='/api/proxy'?gate:null);
-    const sw=app.d.getElementById('warp-toggle');sw.click();await settle();sw.click();
-    assert.equal(sw.getAttribute('aria-checked'),'true');assert.equal(sw.getAttribute('aria-busy'),'true');
-    assert.equal(sw.disabled,true);assert.match(sw.textContent,/Примен/);
-    await app.w.refresh();assert.equal(sw.disabled,true);
-    app.state.proxies.warp.enabled=false;release(response({applied:true}));await settle();
-    assert.equal(sw.getAttribute('aria-checked'),'false');assert.equal(sw.getAttribute('aria-busy'),'false');
-    assert.equal(app.calls.filter(c=>c.path==='/api/proxy').length,1);
-  }finally{app.close();}
-});
-test('fail-closed policy distinguishes colo country, IP country, and independent M2W proof',async()=>{
-  const app=await mount();
-  try {
-    app.state.proxies.warp.exit_country='RU';await app.w.refresh();
-    assert.equal(app.d.getElementById('warp-policy').className,'ok');
-    assert.match(app.d.getElementById('warp-colo').textContent,/DE/);
-    assert.equal(app.d.getElementById('warp-ip-country').textContent,'RU');
-    app.state.proxies.warp.exit_node='DME';app.state.proxies.warp.exit_node_country='RU';
-    app.state.proxies.m2w.foreign_ip_verified=false;await app.w.refresh();
-    assert.notEqual(app.d.getElementById('warp-policy').className,'ok');assert.notEqual(app.d.getElementById('m2w-policy').className,'ok');
-    assert.equal(app.d.getElementById('warp-transport').className,'ok');
-    assert.match(app.d.getElementById('m2w-geo').textContent,/не подтверждён/);
-    app.state.proxies.masque.exit_node_country='';await app.w.refresh();assert.notEqual(app.d.getElementById('masque-policy').className,'ok');
-  }finally{app.close();}
-});
-test('server text is rendered inertly and SOCKS copying uses actual listen and port',async()=>{
-  const app=await mount();let copied;
-  try {
-    Object.defineProperty(app.w.navigator,'clipboard',{value:{writeText:async value=>{copied=value;}}});
-    app.state.proxies.warp.exit_info='<img src=x onerror=alert(1)>';
-    app.state.proxies.warp.listen='::1';await app.w.refresh();
-    assert.equal(app.d.getElementById('warp-exit').querySelector('img'),null);
-    assert.equal(app.d.getElementById('warp-exit').textContent,'<img src=x onerror=alert(1)>');
-    app.d.getElementById('warp-copy').click();await settle();assert.equal(copied,'socks5h://[::1]:1080');
-  }finally{app.close();}
-});
-test('legacy secret query is removed immediately and never persisted or sent in a URL',async()=>{
-  const value=String(Math.random());
-  const app=await mount({url:'http://console.test/?secret='+encodeURIComponent(value)+'&keep=1'});
-  try {
-    assert.equal(app.w.location.search,'?keep=1');
-    assert.equal(app.w.localStorage.length,0);assert.equal(app.w.sessionStorage.length,0);
-    assert.equal(app.calls[0].headers.Authorization,'Bearer '+value);
-    assert.ok(app.calls.every(c=>!c.path.includes(value)));
-    app.state.scan.log=['Bearer '+value];await app.w.refresh();
-    assert.ok(!app.d.body.textContent.includes(value));
-  }finally{app.close();}
+    assert.equal(a.w.location.search, '?keep=1');
+    assert.equal(a.calls[0].headers.Authorization, 'Bearer ' + token);
+    assert.equal(a.w.localStorage.length, 0);
+    assert.equal(a.w.sessionStorage.length, 0);
+    const field = edit(a, 'p-a-name', 'draft');
+    a.setHandler(async (p) =>
+      p === '/api/status'
+        ? {
+            ok: false,
+            status: 401,
+            json: async () => {
+              throw Error('not json');
+            },
+          }
+        : null,
+    );
+    await a.w.refresh();
+    assert.equal(a.d.getElementById('auth').hidden, false);
+    assert.equal(a.d.getElementById('p-a-name'), field);
+    assert.equal(field.value, 'draft');
+    const gate = new Promise((r) => (release = r));
+    let once = true;
+    a.setHandler(async (p) => {
+      if (p === '/api/status' && once) {
+        once = false;
+        return gate;
+      }
+    });
+    const old = a.w.refresh();
+    await settle();
+    a.d.getElementById('token').value = 'new-' + token;
+    submit(a, 'auth-form');
+    await settle();
+    release(response({ error: 'unauthorized' }, 401));
+    await old;
+    assert.equal(a.d.getElementById('auth').hidden, true);
+    assert.equal(a.d.getElementById('token').value, '');
+    assert.equal(a.d.getElementById('p-a-toggle').disabled, false);
+    a.setHandler(async (p) =>
+      p === '/api/profiles/p-a'
+        ? response({ error: 'cross-site request rejected' }, 403)
+        : null,
+    );
+    a.d.getElementById('p-a-toggle').click();
+    await settle();
+    assert.equal(a.d.getElementById('auth').hidden, true);
+    assert.match(
+      a.d.getElementById('message').textContent,
+      /origin|router address/i,
+    );
+    assert.equal(field.value, 'draft');
+    english(a.d);
+  } finally {
+    a.close();
+  }
 });
 
-test('authorization failure with a non-JSON body preserves the console and offers inline password entry',async()=>{
-  const app=await mount();
+test('draft typed during an in-flight save survives its readback; lower server revisions are ignored', async () => {
+  const a = await mount();
+  let release;
   try {
-    const field=app.d.getElementById('cfg-exclude_nodes');field.value='FRA';field.dispatchEvent(new app.w.Event('input',{bubbles:true}));field.blur();
-    app.setHandler(async path=>path==='/api/status'?{ok:false,status:401,json:async()=>{throw new Error('not JSON');}}:null);
-    await app.w.refresh();
-    assert.equal(app.d.getElementById('cfg-exclude_nodes'),field);
-    assert.equal(field.value,'FRA');
-    assert.equal(app.d.getElementById('auth').hidden,false,'HTTP 401 must show token form even without JSON');
-    assert.equal(app.d.getElementById('token').type,'password');
-    assert.equal(app.d.getElementById('warp-toggle').disabled,true);
-  }finally{app.close();}
-});
-test('endpoint forms prefill from status without losing local drafts after blur',async()=>{
-  const app=await mount();
-  try {
-    const input=app.d.getElementById('warp-epin');
-    assert.equal(input.value,'192.0.2.1:2408');
-    input.value='192.0.2.50:443';input.dispatchEvent(new app.w.Event('input',{bubbles:true}));input.blur();
-    app.state.proxies.warp.endpoint='192.0.2.60:443';await app.w.refresh();
-    assert.equal(input.value,'192.0.2.50:443');
-    assert.equal(app.d.getElementById('warp-ep').textContent,'192.0.2.60:443');
-  }finally{app.close();}
-});
-
-test('rejected scans are not called started; running scans expose progress and lock conflicting controls',async()=>{
-  const app=await mount({handler:async(path)=>path==='/api/scan'?response({queued:false}):null});
-  try {
-    app.d.getElementById('scan-btn').click();await settle();
-    assert.equal(app.calls.filter(c=>c.path==='/api/scan').length,1,'scan button sends request');
-    assert.match(app.d.getElementById('message').textContent,/не принят/i);
-    assert.doesNotMatch(app.d.getElementById('message').textContent,/запущен|успешно/i);
-    app.state.scan={scanning:true,for:'warp',started:new Date(Date.now()-65000).toISOString(),reason:'manual',log:['candidate 192.0.2.1'],last_result:'previous result'};
-    await app.w.refresh();
-    assert.equal(app.d.getElementById('scan-spinner').hidden,false);
-    assert.match(app.d.getElementById('scan-state').textContent,/1 мин/);
-    assert.match(app.d.getElementById('scan-log').textContent,/candidate/);
-    assert.equal(app.d.getElementById('scan-details').open,true);
-    assert.equal(app.d.getElementById('warp-scan').disabled,true);
-    assert.equal(app.d.getElementById('warp-apply').disabled,true);
-    assert.equal(app.d.getElementById('restart-btn').disabled,true);
-  }finally{app.close();}
-});
-test('destructive shared operations require explicit confirmation and preserve truthful async wording',async()=>{
-  const app=await mount();
-  try {
-    for(const id of ['restart-btn','rotate-btn','newaccount-btn'])app.d.getElementById(id).click();
-    await settle();assert.equal(app.calls.filter(c=>c.method==='POST').length,0);
-    const prompts=[];app.w.confirm=text=>{prompts.push(text);return true;};
-    app.d.getElementById('restart-btn').click();await settle();
-    assert.equal(prompts.length,1,'restart asks for confirmation');
-    assert.match(prompts[0],/всех|четыр/);
-    assert.deepEqual(app.calls.filter(c=>c.path==='/api/restart').at(-1).body,{proxy:'all'});
-    app.d.getElementById('newaccount-btn').click();await settle();
-    assert.deepEqual(app.calls.filter(c=>c.path==='/api/register').at(-1).body,{fresh:true});
-    assert.doesNotMatch(app.d.getElementById('message').textContent,/аккаунт создан|успешно/i);
-  }finally{app.close();}
+    edit(a, 'p-a-name', 'submitted');
+    const gate = new Promise((r) => (release = r));
+    a.setHandler(async (p) => (p === '/api/profiles/p-a' ? gate : null));
+    submit(a, 'p-a-profile-form');
+    await settle();
+    edit(a, 'p-a-name', 'newer draft');
+    a.state.profiles[0].name = 'submitted';
+    a.state.revision = 5;
+    release(response({ persisted: true, applied: true }));
+    await settle();
+    assert.equal(a.d.getElementById('p-a-name').value, 'newer draft');
+    assert.equal(a.d.getElementById('p-a-name').dataset.dirty, 'true');
+    const older = clone(a.state);
+    older.revision = 4;
+    older.profiles = [];
+    older.proxies = {};
+    a.setHandler(async (p) => (p === '/api/status' ? response(older) : null));
+    await a.w.refresh();
+    assert.ok(a.d.getElementById('p-a-toggle'));
+    assert.equal(a.d.getElementById('p-a-name').value, 'newer draft');
+  } finally {
+    a.close();
+  }
 });
 
-test('settings survive blur and polling; all current fields save with typed values and readback',async()=>{
-  const app=await mount({handler:async(path,opts,state)=>{if(path==='/api/config'){Object.assign(state.config,JSON.parse(opts.body));return response({applied:JSON.parse(opts.body)});}}});
+for (const language of ['ru', 'en'])
+  test(
+    language +
+      ' Relay-WARP wizard and resource diagnostics stay separate, localized and safely unverified',
+    async () => {
+      const s = status();
+      s.relays = [
+        {
+          id: 'resource',
+          name: 'Resource',
+          enabled: true,
+          configured: true,
+          source_ip: '',
+          interface: '',
+          path_confirmed: true,
+          monitor_interval: 300,
+          linked_profiles: 0,
+          status: {
+            state: 'unverified',
+            observed_ip: '198.51.100.4',
+            activation_outcome: 'unverified',
+            binding_verified: false,
+            tunnel_verified: false,
+            error: 'raw monitor error',
+            last_observation_at: new Date().toISOString(),
+          },
+        },
+      ];
+      const a = await mount({ language, state: s });
+      try {
+        assert.ok(
+          a.d.getElementById('resource-toggle').querySelector('.track'),
+        );
+        assert.equal(
+          a.d.getElementById('resource-observed').textContent,
+          '198.51.100.4',
+        );
+        assert.match(
+          a.d.getElementById('resource-activation').textContent,
+          /^unverified · unverified$/,
+        );
+        assert.match(
+          a.d.getElementById('resource-monitor-error').textContent,
+          /raw monitor error/,
+        );
+        edit(a, 'new-profile-type', 'relay-warp');
+        edit(a, 'new-profile-name', 'Relay output');
+        edit(a, 'new-profile-port', '1099');
+        edit(a, 'new-profile-relay_id', 'resource');
+        edit(a, 'new-profile-relay_country', 'FI');
+        submit(a, 'new-profile-form');
+        await settle();
+        const c = a.calls
+          .filter((c) => c.path === '/api/profiles' && c.method === 'POST')
+          .at(-1);
+        assert.equal(c.body.relay_id, 'resource');
+        assert.equal(c.body.relay_country, 'FI');
+        assert.equal(c.body.type, 'relay-warp');
+        const p = a.state.profiles.at(-1);
+        Object.assign(a.state.proxies[p.id], {
+          transport_ready: true,
+          policy_ready: true,
+          ready: true,
+          last_check: new Date().toISOString(),
+          exit_node: 'FRA',
+          exit_node_country: 'DE',
+          exit_country: 'DE',
+          foreign_ip_verified: false,
+        });
+        await a.w.refresh();
+        assert.notEqual(a.d.getElementById(p.id + '-policy').className, 'ok');
+        assert.match(
+          a.d.getElementById(p.id + '-policy-error').textContent,
+          language === 'en'
+            ? /Foreign IP not verified/
+            : /Иностранный IP не подтверждён/,
+        );
+        assert.match(
+          a.d.getElementById(p.id + '-type-label').textContent,
+          /Relay-WARP/,
+        );
+        const prompts = [];
+        a.w.confirm = (t) => {
+          prompts.push(t);
+          return false;
+        };
+        a.d.getElementById('resource-activate').click();
+        await settle();
+        assert.match(prompts[0], /HTTPS\/UDP/);
+        if (language === 'en') {
+          assert.doesNotMatch(prompts[0], /[А-Яа-яЁё]/);
+          english(a.d);
+        }
+        for (const n of a.d.querySelectorAll('[role=switch],summary'))
+          assert.ok(
+            parseInt(a.w.getComputedStyle(n).minHeight) >= 44,
+            'declared hit area ' + n.id,
+          );
+      } finally {
+        a.close();
+      }
+    },
+  );
+
+for (const language of ['ru', 'en'])
+  test(
+    language +
+      ' queued scans, progress, rejected requests and shared maintenance report async truth',
+    async () => {
+      const a = await mount({ language });
+      try {
+        a.setHandler(async (p) =>
+          p === '/api/scan' ? response({ queued: true }) : null,
+        );
+        a.d.getElementById('p-a-scan').click();
+        await settle();
+        assert.deepEqual(
+          a.calls.filter((c) => c.path === '/api/scan').at(-1).body,
+          { for: 'p-a' },
+        );
+        assert.equal(a.d.getElementById('scan-spinner').hidden, false);
+        assert.match(
+          a.d.getElementById('scan-state').textContent,
+          language === 'en' ? /Queued/ : /очередь/,
+        );
+        assert.equal(a.d.getElementById('p-b-toggle').disabled, true);
+        const now = a.w.Date.now;
+        a.w.Date.now = () => now() + 21000;
+        a.w.renderAll();
+        assert.match(
+          a.d.getElementById('message').textContent,
+          language === 'en'
+            ? /not confirmed within 20 seconds/
+            : /не подтверждён за 20 секунд/,
+        );
+        a.w.Date.now = now;
+        a.state.scan = {
+          scanning: true,
+          for: 'p-a',
+          started: new Date(Date.now() - 65000).toISOString(),
+          log: ['raw scanner line'],
+          last_result: 'raw result',
+        };
+        await a.w.refresh();
+        assert.equal(a.d.getElementById('scan-details').open, true);
+        assert.match(
+          a.d.getElementById('scan-state').textContent,
+          language === 'en' ? /1 min/ : /1 мин/,
+        );
+        assert.equal(
+          a.d.getElementById('scan-log').textContent,
+          'raw scanner line',
+        );
+        assert.equal(a.d.getElementById('restart-btn').disabled, true);
+        a.state.scan.scanning = false;
+        await a.w.refresh();
+        a.setHandler(async (p) =>
+          p === '/api/scan' ? response({ queued: false }) : null,
+        );
+        a.d.getElementById('scan-btn').click();
+        await settle();
+        assert.match(
+          a.d.getElementById('message').textContent,
+          language === 'en' ? /not accepted/ : /не принят/,
+        );
+        a.w.confirm = () => true;
+        for (const id of ['restart-btn', 'rotate-btn', 'newaccount-btn']) {
+          a.d.getElementById(id).click();
+          await settle();
+          assert.match(
+            a.d.getElementById('message').textContent,
+            language === 'en' ? /request accepted/ : /Запрос .*принят/,
+          );
+          assert.doesNotMatch(
+            a.d.getElementById('message').textContent,
+            language === 'en'
+              ? /successfully|account created/
+              : /успешно|аккаунт создан/,
+          );
+        }
+        assert.deepEqual(a.calls.find((c) => c.path === '/api/restart').body, {
+          proxy: 'both',
+        });
+        assert.deepEqual(
+          a.calls.filter((c) => c.path === '/api/register').map((c) => c.body),
+          [{ fresh: false }, { fresh: true }],
+        );
+        if (language === 'en') english(a.d);
+      } finally {
+        a.close();
+      }
+    },
+  );
+
+test('auto profile displays real runtime endpoint, not empty pin; server strings stay inert and copy uses actual IPv6 bind', async () => {
+  const a = await mount();
+  let copied;
   try {
-    const input=app.d.getElementById('cfg-check_period');assert.ok(input,'settings field exists');
-    assert.equal(input.value,'30');assert.equal(app.d.getElementById('cfg-autoscan_start').checked,true);
-    input.focus();input.value='45';input.dispatchEvent(new app.w.Event('input',{bubbles:true}));input.blur();
-    app.state.config.check_period=60;await app.w.refresh();assert.equal(input.value,'45');
-    const auto=app.d.getElementById('cfg-autoscan_start');auto.checked=false;auto.dispatchEvent(new app.w.Event('change',{bubbles:true}));
-    app.d.getElementById('save-config').click();await settle();
-    const post=app.calls.find(c=>c.path==='/api/config');assert.deepEqual(post.body,{check_period:45,autoscan_start:false});
-    assert.match(app.d.getElementById('config-state').textContent,/Нет изменений/);
-    assert.equal(app.state.config.exclude_nodes,'DME');
-  }finally{app.close();}
+    a.state.profiles[0].endpoint = '';
+    a.state.proxies['p-a'].endpoint = '192.0.2.222:2408';
+    a.state.profiles[0].listen = '::1';
+    a.state.proxies['p-a'].exit_info = '<img src=x onerror=alert(1)>';
+    await a.w.refresh();
+    assert.equal(a.d.getElementById('p-a-ep').textContent, '192.0.2.222:2408');
+    assert.equal(a.d.getElementById('p-a-exit').querySelector('img'), null);
+    Object.defineProperty(a.w.navigator, 'clipboard', {
+      value: { writeText: async (v) => (copied = v) },
+    });
+    a.d.getElementById('p-a-copy').click();
+    await settle();
+    assert.equal(copied, 'socks5h://[::1]:1080');
+    assert.ok(!a.d.body.textContent.includes(':undefined'));
+  } finally {
+    a.close();
+  }
 });
 
-test('row-local endpoint application never submits another open form',async()=>{
-  const app=await mount();
+test('MASQUE edits validate without AWG; migrated legacy transport controls are explicitly read-only', async () => {
+  const s = status();
+  delete s.profiles[2].awg;
+  s.profiles.push(profile('legacy', 'legacy-m2w', { port: 1088 }));
+  s.proxies.legacy = { ...s.proxies['p-b'] };
+  const a = await mount({ state: s });
   try {
-    for(const key of keys){app.d.getElementById(key+'-details').open=true;}
-    assert.ok(app.d.getElementById('warp-epin'),'row endpoint editor exists');
-    app.d.getElementById('warp-epin').value='192.0.2.10:2408';
-    app.d.getElementById('masque-epin').value='192.0.2.11:443';
-    app.d.getElementById('masque-apply').click();await settle();
-    assert.deepEqual(app.calls.filter(c=>c.path==='/api/endpoint').map(c=>c.body),[{proxy:'masque',endpoint:'192.0.2.11:443'}]);
-    app.d.getElementById('m2w-outin').value='192.0.2.20:443';
-    app.d.getElementById('m2w-inin').value='192.0.2.21:2408';
-    app.d.getElementById('m2w-apply').click();await settle();
-    assert.deepEqual(app.calls.filter(c=>c.path==='/api/endpoint').at(-1).body,{proxy:'m2w',outer:'192.0.2.20:443',inner:'192.0.2.21:2408'});
-    app.d.getElementById('m2w-clearbtn').click();await settle();
-    assert.deepEqual(app.calls.filter(c=>c.path==='/api/endpoint/clear').at(-1).body,{proxy:'m2w'});
-  }finally{app.close();}
+    edit(a, 'p-h2-name', 'renamed H2');
+    edit(a, 'p-h2-transport-choice', 'quic');
+    submit(a, 'p-h2-profile-form');
+    await settle();
+    const c = a.calls.find((c) => c.path === '/api/profiles/p-h2');
+    assert.ok(c, 'hidden AWG validation must not block MASQUE save');
+    assert.deepEqual(c.body, { name: 'renamed H2', transport: 'quic' });
+    assert.equal(
+      a.d.getElementById('p-h2-type-label').textContent,
+      'MASQUE · QUIC',
+    );
+    assert.equal(a.d.getElementById('legacy-pinform').hidden, true);
+    assert.match(
+      a.d.getElementById('legacy-details').textContent,
+      /только для чтения/,
+    );
+  } finally {
+    a.close();
+  }
 });
 
-test('four proxy switches use the exact proxy contract and authoritative readback',async()=>{
-  const app=await mount();
+test('Relay source changes require a new path acknowledgement and in-flight saves preserve newer resource drafts', async () => {
+  const s = status();
+  s.relays = [
+    {
+      id: 'resource',
+      name: 'Resource',
+      enabled: true,
+      configured: true,
+      source_ip: '',
+      interface: '',
+      path_confirmed: true,
+      monitor_interval: 300,
+    },
+  ];
+  const a = await mount({ state: s });
+  let release;
   try {
-    assert.equal(app.d.querySelectorAll('[role="switch"]').length,4);
-    for(const key of keys){
-      const sw=app.d.getElementById(key+'-toggle');
-      assert.equal(sw.getAttribute('aria-checked'),'true');
-      sw.click();await settle();
-      const posts=app.calls.filter(c=>c.method==='POST');
-      assert.deepEqual(posts.at(-1),{path:'/api/proxy',method:'POST',headers:{'Content-Type':'application/json'},body:{proxy:key,enabled:false}});
-      assert.equal(sw.getAttribute('aria-checked'),'false');
+    edit(a, 'resource-source_ip', '198.51.100.8');
+    assert.equal(a.d.getElementById('resource-path_confirmed').checked, false);
+    assert.equal(a.d.getElementById('resource-activate').disabled, true);
+    submit(a, 'resource-relay-form');
+    await settle();
+    assert.deepEqual(
+      a.calls.filter((c) => c.path === '/api/relays/resource').at(-1).body,
+      { source_ip: '198.51.100.8', path_confirmed: false },
+    );
+    assert.equal(a.d.getElementById('resource-activate').disabled, true);
+    edit(a, 'resource-name', 'sent');
+    const gate = new Promise((r) => (release = r));
+    a.setHandler(async (p) => (p === '/api/relays/resource' ? gate : null));
+    submit(a, 'resource-relay-form');
+    await settle();
+    edit(a, 'resource-name', 'later');
+    a.state.relays[0].name = 'sent';
+    release(response({ persisted: true, applied: true }));
+    await settle();
+    assert.equal(a.d.getElementById('resource-name').value, 'later');
+    assert.equal(a.d.getElementById('resource-name').dataset.dirty, 'true');
+  } finally {
+    a.close();
+  }
+});
+
+for (const language of ['ru', 'en'])
+  test(
+    language +
+      ' errors redact tokens/activation URLs and never interpret backend diagnostics as HTML',
+    async () => {
+      const token = String(Math.random()),
+        url = 'https://de.tribukvy.ltd/test-' + token,
+        a = await mount({
+          language,
+          url: 'http://console.test/?secret=' + token,
+        });
+      try {
+        const raw =
+          'raw <img src=x onerror=alert(1)> Bearer ' +
+          token +
+          ' ?secret=' +
+          token;
+        a.state.scan.log = [raw];
+        a.state.proxies['p-a'].exit_info = raw;
+        await a.w.refresh();
+        assert.ok(!a.d.getElementById('scan-log').textContent.includes(token));
+        assert.equal(a.d.getElementById('p-a-exit').querySelector('img'), null);
+        edit(a, 'new-relay-url', url);
+        a.setHandler(async (p) =>
+          p === '/api/relays'
+            ? response({ error: 'invalid ' + url }, 400)
+            : p === '/api/log'
+              ? response({ lines: [raw] })
+              : null,
+        );
+        submit(a, 'new-relay-form');
+        await settle();
+        await a.w.refreshLog();
+        assert.equal(a.d.getElementById('new-relay-url').value, '');
+        assert.ok(!a.d.body.textContent.includes(token));
+        assert.equal(a.d.getElementById('message').querySelector('img'), null);
+        assert.match(
+          a.d.getElementById('message').textContent,
+          language === 'en' ? /\[redacted\]/ : /\[скрыто\]/,
+        );
+      } finally {
+        a.close();
+      }
+    },
+  );
+
+for (const language of ['ru', 'en'])
+  test(
+    language +
+      ' failed global settings remain dirty after blur and can be discarded; readback confirms typed settings only',
+    async () => {
+      const a = await mount({ language });
+      try {
+        const field = edit(a, 'cfg-check_period', '45');
+        edit(a, 'cfg-autoscan_start', false);
+        edit(a, 'cfg-exclude_countries', 'RU,BY');
+        a.setHandler(async (p) =>
+          p === '/api/config'
+            ? response({ error: 'write denied', persisted: false }, 400)
+            : null,
+        );
+        submit(a, 'config-form');
+        await settle();
+        assert.equal(field.value, '45');
+        assert.match(
+          a.d.getElementById('config-state').textContent,
+          language === 'en' ? /Unsaved fields: 3/ : /Несохранённых полей: 3/,
+        );
+        assert.match(a.d.getElementById('message').textContent, /write denied/);
+        a.state.config.check_period = 60;
+        await a.w.refresh();
+        assert.equal(field.value, '45');
+        a.d.getElementById('reset-config').click();
+        assert.equal(field.value, '60');
+        edit(a, 'cfg-check_period', '50');
+        a.setHandler(null);
+        submit(a, 'config-form');
+        await settle();
+        assert.deepEqual(
+          a.calls.filter((c) => c.path === '/api/config').at(-1).body,
+          { check_period: 50 },
+        );
+        assert.equal(
+          a.d.getElementById('config-state').textContent,
+          language === 'en' ? 'No changes' : 'Нет изменений',
+        );
+        if (language === 'en') english(a.d);
+      } finally {
+        a.close();
+      }
+    },
+  );
+
+test('normalized readback confirms filters/name without hiding mismatches or depending on AWG JSON key order', async () => {
+  const a = await mount({
+    handler: async (path, opts, state) => {
+      if (path === '/api/profiles/p-a') {
+        const body = JSON.parse(opts.body);
+        Object.assign(state.profiles[0], body);
+        if (body.name !== undefined) state.profiles[0].name = body.name.trim();
+        if (body.exclude_countries !== undefined)
+          state.profiles[0].exclude_countries = 'RU,BY';
+        if (body.awg)
+          state.profiles[0].awg = Object.fromEntries(
+            Object.entries(body.awg).reverse(),
+          );
+        state.revision++;
+        return response({ persisted: true, applied: true });
+      }
+    },
+  });
+  try {
+    edit(a, 'p-a-name', '  renamed  ');
+    edit(a, 'p-a-exclude_countries', 'ru, by,ru');
+    edit(a, 'p-a-awg-jc', '7');
+    submit(a, 'p-a-profile-form');
+    await settle();
+    assert.match(a.d.getElementById('message').textContent, /Сохранено\./);
+    assert.equal(a.d.getElementById('p-a-exclude_countries').value, 'RU,BY');
+    assert.equal(a.d.getElementById('p-a-name').value, 'renamed');
+    assert.equal(a.d.getElementById('p-a-awg-jc').dataset.dirty, undefined);
+  } finally {
+    a.close();
+  }
+});
+
+test('missing revision fails closed and never refreshes stale green readiness', async () => {
+  const a = await mount();
+  try {
+    delete a.state.revision;
+    await a.w.refresh();
+    assert.equal(a.d.getElementById('p-a-toggle').disabled, true);
+    assert.notEqual(a.d.getElementById('p-a-policy').className, 'ok');
+  } finally {
+    a.close();
+  }
+});
+
+test('profile wizard creates WARP/MASQUE, edits only its stable row, restores API AWG preset and deletes last profile', async () => {
+  const a = await mount();
+  try {
+    edit(a, 'new-profile-name', 'another WARP');
+    edit(a, 'new-profile-port', '1090');
+    submit(a, 'new-profile-form');
+    await settle();
+    let c = a.calls
+      .filter((c) => c.path === '/api/profiles' && c.method === 'POST')
+      .at(-1);
+    assert.ok(c);
+    assert.equal(c.body.type, 'warp');
+    assert.equal(c.body.name, 'another WARP');
+    assert.equal(c.body.port, 1090);
+    assert.deepEqual(c.body.awg, awg);
+    edit(a, 'new-profile-type', 'masque');
+    edit(a, 'new-profile-name', 'H2');
+    edit(a, 'new-profile-port', '1091');
+    edit(a, 'new-profile-transport', 'http2');
+    submit(a, 'new-profile-form');
+    await settle();
+    c = a.calls
+      .filter((c) => c.path === '/api/profiles' && c.method === 'POST')
+      .at(-1);
+    assert.equal(c.body.type, 'masque');
+    assert.equal(c.body.transport, 'http2');
+    assert.ok(!('awg' in c.body));
+    const other = edit(a, 'p-b-name', 'unsaved sibling');
+    edit(a, 'p-a-name', 'edited');
+    edit(a, 'p-a-exclude_countries', 'BY');
+    edit(a, 'p-a-awg-jc', '7');
+    await a.w.refresh();
+    assert.equal(other.value, 'unsaved sibling');
+    assert.equal(a.d.getElementById('p-a-awg-jc').value, '7');
+    submit(a, 'p-a-profile-form');
+    await settle();
+    c = a.calls
+      .filter((c) => c.path === '/api/profiles/p-a' && c.method === 'PATCH')
+      .at(-1);
+    assert.equal(c.body.name, 'edited');
+    assert.equal(c.body.exclude_countries, 'BY');
+    assert.equal(c.body.awg.jc, 7);
+    assert.equal(other.value, 'unsaved sibling');
+    assert.ok(!a.calls.some((c) => c.path === '/api/profiles/p-b'));
+    a.d.getElementById('p-a-awg-reset').click();
+    assert.equal(a.d.getElementById('p-a-awg-jc').value, String(awg.jc));
+    submit(a, 'p-a-profile-form');
+    await settle();
+    assert.deepEqual(
+      a.calls.filter((c) => c.path === '/api/profiles/p-a').at(-1).body.awg,
+      awg,
+    );
+    a.w.confirm = () => false;
+    a.d.getElementById('p-a-delete').click();
+    await settle();
+    assert.ok(a.state.profiles.some((p) => p.id === 'p-a'));
+    a.w.confirm = () => true;
+    for (const p of [...a.state.profiles]) {
+      a.d.getElementById(p.id + '-delete').click();
+      await settle();
     }
-  } finally {app.close();}
+    assert.equal(a.state.profiles.length, 0);
+    assert.equal(a.d.querySelectorAll('#services [role=switch]').length, 0);
+  } finally {
+    a.close();
+  }
 });

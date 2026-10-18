@@ -344,6 +344,58 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             br.dependencies("mips")
 
+    def test_dynamic_profile_v3_bundle_uses_private_seed_and_excludes_runtime_secrets(self):
+        import shutil
+        repo = Path(__file__).resolve().parent.parent
+        for source in br.BUNDLE_SOURCES.values():
+            destination = self.root / source
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(repo / source, destination)
+        (self.root / 'main.go').write_text('const version = "3.0.0"\n')
+        secret = self.root / 'etc/warpd/profiles.json'
+        secret.parent.mkdir(parents=True)
+        secret.write_bytes(b'TEST PRIVATE RELAY CAPABILITY MUST NEVER SHIP')
+        (secret.parent / 'profiles.json.user-backup').write_bytes(b'TEST UNKNOWN BACKUP')
+        binaries = {}
+        for name in ('warpd', 'mihomo', 'warpscout'):
+            binary = self.root / ('test-' + name)
+            binary.write_text('#!/bin/sh\n# TEST executable fixture, not a distributable binary\nexit 0\n')
+            binaries[name] = binary
+        version = br.read_version(self.root / 'main.go')
+        archive = br.create_archive(self.root, binaries, self.root / 'out', version, 'arm64', 123)
+        self.assertEqual(archive.name, 'warpd-3.0.0-linux-arm64.tar.gz')
+        extracted = self.root / 'extracted'
+        with tarfile.open(archive, 'r:gz') as tar:
+            contents = {m.name: tar.extractfile(m).read() for m in tar if m.isfile()}
+            self.assertFalse(any('profiles.json' in name for name in contents))
+            self.assertFalse(any(b'TEST PRIVATE RELAY' in value for value in contents.values()))
+            tar.extractall(extracted, filter='data')
+        bundle = extracted / 'warpd-3.0.0-linux-arm64'
+        target = self.root / 'offline-root'
+        target.mkdir()
+        def run(script, *args):
+            result = subprocess.run(['sh', str(bundle / script), '--root', str(target), *args],
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        run('install.sh')
+        config = (target / 'etc/config/warpd').read_bytes()
+        self.assertIn(b"option profile_schema '1'", config)
+        self.assertEqual(config.count(b'config warp '), 1)
+        profile = target / 'etc/warpd/profiles.json'
+        self.assertFalse(profile.exists(), 'bundle must leave migration to InitProfiles')
+        original = b'{"schema":1,"profiles":{},"relays":{}}\n'
+        profile.write_bytes(original)
+        profile.chmod(0o600)
+        run('install.sh')
+        self.assertEqual(profile.read_bytes(), original)
+        self.assertEqual((target / 'etc/config/warpd').read_bytes(), config)
+        self.assertEqual(profile.stat().st_mode & 0o7777, 0o600)
+        run('uninstall.sh')
+        self.assertEqual(profile.read_bytes(), original)
+        run('uninstall.sh', '--purge')
+        self.assertFalse(profile.exists())
+        self.assertEqual(secret.read_bytes(), b'TEST PRIVATE RELAY CAPABILITY MUST NEVER SHIP')
+
     def test_reads_only_exact_version_constant(self):
         self.assertIsNotNone(br, "release builder is not implemented")
         source = self.root / "main.go"

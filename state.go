@@ -16,6 +16,12 @@ type ProxyState struct {
 	GeoCheck          string `json:"geo_check"`
 	GeoError          string `json:"geo_error"`
 	geoKey            geoCacheKey
+	checkedPolicy     geoCacheKey
+	ID                string   `json:"id"`
+	Type              string   `json:"type"`
+	Paused            bool     `json:"paused"`
+	EffectiveEnabled  bool     `json:"effective_enabled"`
+	PublicListening   bool     `json:"public_listening"`
 	Pid               int      `json:"pid"`
 	Listen            string   `json:"listen"`
 	Port              int      `json:"port"`

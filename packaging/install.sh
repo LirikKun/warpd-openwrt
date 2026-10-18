@@ -55,6 +55,14 @@ for external in "$MIHOMO" "$WARPSCOUT"; do
             "$ROOT/usr/libexec/warpd/"*|"$ROOT/usr/share/warpd/"*|"$ROOT/usr/bin/warpd"|"$ROOT/etc/init.d/warpd"|"$ROOT/usr/sbin/warpd-uninstall"|"$ROOT/etc/config/warpd")
                 fail "Dependency points at an installer-owned path: $external" ;;
         esac
+        case "$path" in
+            /etc/*|"$ROOT/etc/"*|*/config|*/config.*|*/config/*|*/configs/*|*.json|*.yaml|*.yml|*.uci|*.conf|*.config|*.key)
+                fail "Dependency points at private data or a service configuration: $external" ;;
+        esac
+    done
+    # A hardlink alias resolves to a different pathname but the same secret.
+    for private in /etc/config/warpd /etc/warpd/warp-account.json /etc/warpd/profiles.json; do
+        [ ! "$external" -ef "$ROOT$private" ] || fail "Dependency aliases private data: $external"
     done
 done
 # Inspect every ancestor without following links. Refuse special files too.
@@ -110,7 +118,7 @@ if [ "$PORTABLE" = 0 ]; then
 fi
 # Conservative peak-space budget: all new files plus all old backups, metadata,
 # filesystem block rounding and 256 KiB reserve. Check each destination mount.
-TARGETS='/usr/bin/warpd /usr/libexec/warpd/mihomo /usr/libexec/warpd/warpscout /etc/init.d/warpd /usr/sbin/warpd-uninstall /usr/share/warpd/VERSION /usr/share/warpd/ARCH /usr/share/warpd/OWNER /etc/config/warpd'
+TARGETS='/usr/bin/warpd /usr/libexec/warpd/mihomo /usr/libexec/warpd/warpscout /etc/init.d/warpd /usr/sbin/warpd-uninstall /usr/share/warpd/VERSION /usr/share/warpd/ARCH /usr/share/warpd/OWNER /etc/config/warpd /etc/warpd/profiles.json'
 NEEDED=262144
 for source in bin/warpd bin/mihomo bin/warpscout files/warpd.init uninstall.sh VERSION ARCH files/warpd.config; do
     case "$source" in
@@ -127,6 +135,10 @@ for target in $TARGETS; do
         *) [ ! -L "$dest" ] || fail "Symlink target refused: $dest" ;;
     esac
     [ ! -e "$dest" ] || [ -f "$dest" ] || fail "Not a regular target: $dest"
+    if [ "$target" = /etc/warpd/profiles.json ] && [ -e "$dest" ]; then
+        links=$(LC_ALL=C ls -nd "$dest" | awk '{print $2}')
+        [ "$links" = 1 ] || fail "Hardlinked profile store refused: $dest"
+    fi
     if [ -e "$dest" ] || [ -L "$dest" ]; then
         if [ -L "$dest" ]; then
             # Back up the link, not its external binary; include readlink's newline.
@@ -438,15 +450,30 @@ if [ "$OFFLINE" = 0 ] && [ "$WAS_RUNNING" = 1 ]; then
     SERVICE_CHANGED=1
     stop_wait || fail 'Timed out waiting for warpd and its children to stop; no app files replaced'
 fi
+# The private directory must be traversable before creating its journal, even
+# when an offline root arrived with missing execute bits. finish restores mode.
+chmod 700 "$ROOT/etc/warpd"
+# Snapshot only after the old daemon stopped: it may persist profiles on exit.
+# No new file is staged: absence must remain absence until InitProfiles migrates.
+# The ordinary journal restores prior bytes/mode (or absence) if startup fails.
+dest="$ROOT/etc/warpd/profiles.json"
+[ ! -L "$dest" ] || fail "Symlink target refused: $dest"
+[ ! -e "$dest" ] || [ -f "$dest" ] || fail "Not a regular target: $dest"
+stage=$(mktemp -d "$ROOT/etc/warpd/.warpd-stage.XXXXXX")
+JOURNAL="$stage|$dest
+$JOURNAL"
+if [ -e "$dest" ]; then cp -Pp "$dest" "$stage/old"; fi
+: > "$stage/committed"
 while IFS='|' read -r stage dest; do
     [ -n "$stage" ] || continue
+    [ -e "$stage/new" ] || [ -L "$stage/new" ] || continue
     # Mark before rename so a signal between the two still restores safely.
     : > "$stage/committed"
     mv -f "$stage/new" "$dest"
 done <<EOF
 $JOURNAL
 EOF
-chmod 700 "$ROOT/etc/warpd"
+if [ -f "$ROOT/etc/warpd/profiles.json" ]; then chmod 600 "$ROOT/etc/warpd/profiles.json"; fi
 if [ "$OFFLINE" = 0 ]; then
     [ "$UPGRADE" = 1 ] || { SERVICE_CHANGED=1; /etc/init.d/warpd enable; }
     if { [ "$UPGRADE" = 0 ] || [ "$WAS_RUNNING" = 1 ]; } && [ "$(uci -q get warpd.global.enabled || :)" != 0 ]; then

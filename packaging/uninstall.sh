@@ -54,7 +54,7 @@ for target in $TARGETS; do
     [ -f "$dest" ] || [ -L "$dest" ] || fail "Unexpected target type: $dest"
 done
 if [ "$PURGE" = 1 ]; then
-    for target in /etc/config/warpd /etc/warpd/warp-account.json; do
+    for target in /etc/config/warpd /etc/warpd/warp-account.json /etc/warpd/profiles.json; do
         dest="$ROOT$target"
         [ ! -L "$dest" ] || fail "Symlink purge target refused: $dest"
         [ ! -e "$dest" ] || [ -f "$dest" ] || fail "Unexpected purge target: $dest"
@@ -118,11 +118,11 @@ if [ "$OWNED" = 1 ]; then
     rmdir "$ROOT/usr/libexec/warpd" "$ROOT/usr/share/warpd" 2>/dev/null || :
 fi
 if [ "$PURGE" = 1 ]; then
-    printf '%s\n' 'WARNING: --purge deletes the warpd configuration and WARP account; unknown files are preserved.' >&2
-    rm -f "$ROOT/etc/config/warpd" "$ROOT/etc/warpd/warp-account.json"
+    printf '%s\n' 'WARNING: --purge deletes /etc/config/warpd (configuration), /etc/warpd/warp-account.json (WARP account), and /etc/warpd/profiles.json (profiles and Relay activation credentials); unknown files are preserved.' >&2
+    rm -f "$ROOT/etc/config/warpd" "$ROOT/etc/warpd/warp-account.json" "$ROOT/etc/warpd/profiles.json"
     rmdir "$ROOT/etc/warpd" 2>/dev/null || :
 else
-    printf '%s\n' 'Configuration and WARP account preserved (use --purge to delete them).'
+    printf '%s\n' 'Configuration, WARP account, profiles and Relay activation credentials preserved (use --purge to delete the known files).'
 fi
 if [ "$OFFLINE" = 1 ]; then
     printf '%s\n' 'Uninstalled warpd offline; host service not touched.'

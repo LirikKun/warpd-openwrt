@@ -320,10 +320,12 @@ status=$?
         self.assertEqual(sections['global']['web_secret'], '')
         self.assertEqual(sections['global']['check_period'], '300')
         self.assertEqual(sections['global']['autoscan_on_start'], '1')
-        for name, port in [('warp', '4001'), ('masque', '4003'), ('masqueh2', '4004'), ('m2w', '4005')]:
-            self.assertEqual(sections[name]['enabled'], '1' if name == 'warp' else '0')
-            self.assertEqual(sections[name]['port'], port)
-            self.assertEqual(sections[name]['listen'], '0.0.0.0')
+        self.assertEqual(set(sections), {'global', 'warp'})
+        self.assertEqual(sections['global']['profile_schema'], '1')
+        self.assertEqual(sections['warp']['enabled'], '1')
+        self.assertEqual(sections['warp']['port'], '4001')
+        self.assertEqual(sections['warp']['listen'], '0.0.0.0')
+        self.assertFalse((self.root / 'etc/warpd/profiles.json').exists())
         defaults = (HERE.parent / 'warpd.uci-defaults').read_text()
         expected = re.findall(r"uci set warpd\.(\w+)\.(\w+)='([^']*)'", defaults)
         for section, field, value in expected:
@@ -459,7 +461,7 @@ status=$?
         result = self.run_script('uninstall.sh', '--purge')
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def live(self, command, daemon=None):
+    def live(self, command, daemon=None, start_hook=''):
         """Real shell in an isolated user/PID/network/mount namespace; no host init."""
         if not shutil.which('bwrap'):
             self.skipTest('bubblewrap unavailable for isolated live-mode fixture')
@@ -503,6 +505,8 @@ case "$1" in
  *) exit 1 ;;
 esac
 '''
+        if start_hook:
+            init = init.replace('  [ ! -f /opt/fail-start ]', start_hook + '\n  [ ! -f /opt/fail-start ]')
         self.put(self.bundle / 'files/warpd.init', init, 0o755)
         # Host dash is a real executable TEST payload, not a production daemon.
         shutil.copy2(daemon or '/bin/dash', self.bundle / 'bin/warpd')

@@ -22,6 +22,9 @@ type Orchestrator struct {
 	// Serialize desired-config mutations and every runtime apply. Snapshot
 	// current settings inside this lock, never before waiting for it.
 	applyMu       sync.Mutex
+	closed        bool // guarded by applyMu; shutdown cannot be undone by a late apply
+	gatesMu       sync.Mutex
+	gates         map[string]*profileGate
 	accountLoader func() (warpAccount, error)
 	onApply       func(name string)
 	settings      *Settings
@@ -55,8 +58,9 @@ type scanRequest struct {
 }
 
 type endpoints struct {
-	warp   string
-	masque map[string]string // "masque"/"masqueh2" -> ip:port
+	warp     string
+	profiles map[string]string // every dynamic profile has independent scanned state
+	masque   map[string]string // "masque"/"masqueh2" -> ip:port
 }
 
 var (
@@ -71,7 +75,10 @@ func stateGetEndpoints() endpoints {
 }
 
 func copyEndpoints(e endpoints) endpoints {
-	cp := endpoints{warp: e.warp, masque: make(map[string]string, len(e.masque))}
+	cp := endpoints{warp: e.warp, masque: make(map[string]string, len(e.masque)), profiles: map[string]string{}}
+	for k, v := range e.profiles {
+		cp.profiles[k] = v
+	}
 	for k, v := range e.masque {
 		cp.masque[k] = v
 	}
@@ -106,17 +113,32 @@ func (o *Orchestrator) applyCurrent() error {
 func (o *Orchestrator) restartCurrent() error {
 	o.applyMu.Lock()
 	defer o.applyMu.Unlock()
+	o.closeProfileGates()
 	mihomo.Stop()
 	return o.applyLocked()
 }
 
 func (o *Orchestrator) applyLocked() error {
+	if o.closed {
+		return fmt.Errorf("proxy runtime stopped")
+	}
 	g := o.settings.Snapshot()
+	mihomo.ReconcileRelayIntent(g)
+	o.syncProfileGatesLocked(g)
 	enabled := false
-	for _, p := range g.Proxies {
-		enabled = enabled || p.Enabled
+	if g.ProfileError != "" {
+		mihomo.Stop()
+		return fmt.Errorf("profile configuration unavailable")
+	}
+	needsAccount := false
+	for id, p := range g.Proxies {
+		if effectiveEnabled(g, p) && profileType(id, p) != "relay-warp" {
+			needsAccount = true
+		}
+		enabled = enabled || effectiveEnabled(g, p)
 	}
 	if !enabled {
+		o.closeProfileGates()
 		mihomo.Stop()
 		return nil
 	}
@@ -124,9 +146,15 @@ func (o *Orchestrator) applyLocked() error {
 	if loader == nil {
 		loader = func() (warpAccount, error) { return loadAccount(account) }
 	}
-	acc, err := loader()
-	if err != nil {
-		return err
+	var acc warpAccount
+	if needsAccount {
+		var err error
+		acc, err = loader()
+		if err != nil {
+			mihomo.RevokeRelays()
+			o.closeProfileGates()
+			return err
+		}
 	}
 	e := stateGetEndpoints()
 	// Supervision may discover missing dependencies only when autoscan is
@@ -135,14 +163,25 @@ func (o *Orchestrator) applyLocked() error {
 		o.queueMissing("missing endpoint")
 	}
 	if err := mihomo.Ensure(g, e, acc); err != nil {
+		// A pending Relay can coexist with an unchanged, successfully applied
+		// ordinary sibling. Reconcile per-profile gates; actual apply failures
+		// still close everything through AppliedSnapshot's exact-config check.
+		o.syncProfileGatesLocked(g)
 		return err
 	}
+	e = stateGetEndpoints()
+	o.syncProfileGatesLocked(g)
 	if _, ok := mihomo.AppliedSnapshot(g, e); !ok {
 		return fmt.Errorf("mihomo apply could not be verified")
 	}
 	for key, p := range g.Proxies {
-		if !p.Enabled {
+		if !effectiveEnabled(g, p) {
 			continue
+		}
+		if profileType(key, p) == "relay-warp" {
+			if !mihomo.RelayReady(g, key) {
+				return fmt.Errorf("pending: Relay transport unavailable")
+			}
 		}
 		ep, outer := liveEndpoint(key, p, e)
 		if ep == "" || key == "m2w" && (outer == "" || outer == ep) {
@@ -152,10 +191,18 @@ func (o *Orchestrator) applyLocked() error {
 	return nil
 }
 
+func (o *Orchestrator) Close() {
+	o.applyMu.Lock()
+	defer o.applyMu.Unlock()
+	o.closed = true
+	o.closeProfileGates()
+	mihomo.Stop() // invalidates, cancels and joins all UDP bridges before child reap
+}
+
 func missingScanTargets(g Settings, e endpoints) map[string]bool {
 	wanted := map[string]bool{}
-	for _, key := range []string{"warp", "masque", "masqueh2"} {
-		if p := g.Proxies[key]; p != nil && p.Enabled {
+	for _, key := range profileIDs(g) {
+		if p := g.Proxies[key]; effectiveEnabled(g, p) {
 			if ep, _ := liveEndpoint(key, p, e); ep == "" {
 				wanted[key] = true
 			}
@@ -184,14 +231,21 @@ func (o *Orchestrator) requestScan(for_, reason string) bool {
 // scanTargets resolves proxy names to the underlying scans they need. A chain
 // may need scans even when its standalone warp/masque listeners are disabled.
 func scanTargets(g Settings, for_ string, force bool) []string {
-	wanted := make(map[string]bool)
-	addProxy := func(key string) {
-		if p := g.Proxies[key]; p != nil && p.Enabled && (force || p.Endpoint == "") {
-			wanted[key] = true
-		}
+	if g.ProfileError != "" {
+		return nil
 	}
-	addChain := func() {
-		if p := g.Proxies["m2w"]; p != nil && p.Enabled {
+	wanted := map[string]bool{}
+	add := func(id string) {
+		p := g.Proxies[id]
+		if !effectiveEnabled(g, p) {
+			return
+		}
+		switch profileType(id, p) {
+		case "warp", "masque":
+			if force || p.Endpoint == "" {
+				wanted[id] = true
+			}
+		case "legacy-m2w":
 			if p.Inner == "" {
 				wanted["warp"] = true
 			}
@@ -200,23 +254,23 @@ func scanTargets(g Settings, for_ string, force bool) []string {
 			}
 		}
 	}
-	switch for_ {
-	case "warp", "masque", "masqueh2":
-		addProxy(for_)
-	case "m2w":
-		addChain()
-	case "both":
-		for _, key := range []string{"warp", "masque", "masqueh2"} {
-			addProxy(key)
+	if for_ == "both" {
+		for _, id := range profileIDs(g) {
+			add(id)
 		}
-		addChain()
-	default:
-		return nil
+	} else {
+		add(for_)
+	}
+	ordered := []string{"warp", "masque", "masqueh2"}
+	for _, id := range profileIDs(g) {
+		if id != "warp" && id != "masque" && id != "masqueh2" {
+			ordered = append(ordered, id)
+		}
 	}
 	var targets []string
-	for _, key := range []string{"warp", "masque", "masqueh2"} {
-		if wanted[key] {
-			targets = append(targets, key)
+	for _, id := range ordered {
+		if wanted[id] {
+			targets = append(targets, id)
 		}
 	}
 	return targets
@@ -414,11 +468,8 @@ func (o *Orchestrator) runRequest(req scanRequest) {
 		if !needed {
 			continue
 		}
-		if g.Proxies[key] == nil {
-			g.Proxies[key] = (&ProxySettings{}).defaults(key)
-		}
-		if key == "warp" {
-			o.scanWarp(g)
+		if profileType(key, g.Proxies[key]) == "warp" {
+			o.scanWarpProfile(g, key)
 		} else {
 			o.scanMasque(g, key)
 		}
@@ -521,8 +572,13 @@ func reportPing(report, endpoint string) int {
 
 // scanWarp excludes DME/RU nodes and preserves scanner ranking, with a
 // soft preference for working endpoints under the host-ping limit.
-func (o *Orchestrator) scanWarp(g Settings) {
-	report := filepath.Join(os.TempDir(), "warpd-scan-warp.report.txt")
+func (o *Orchestrator) scanWarp(g Settings) { o.scanWarpProfile(g, "warp") }
+func (o *Orchestrator) scanWarpProfile(g Settings, key string) {
+	p := g.Proxies[key]
+	if p == nil {
+		p = (&ProxySettings{}).defaults(key)
+	}
+	report := filepath.Join(os.TempDir(), "warpd-scan-"+key+".report.txt")
 	defer os.Remove(report)
 	if err := os.Remove(report); err != nil && !os.IsNotExist(err) {
 		o.log("warp scan report cleanup failed: %v", err)
@@ -534,16 +590,19 @@ func (o *Orchestrator) scanWarp(g Settings) {
 	args := []string{
 		"scan",
 		"-a", account,
-		"-p", g.Proxies["warp"].Protocol,
+		"-p", defstr(p.Protocol, "awg"),
 		"-P",
 		"-n", fmt.Sprintf("%d", g.ScanSample),
 		"-jt", fmt.Sprintf("%d", g.ScanJobs),
 		"-best",
 		"-o", report,
 	}
-	args = append(args, excludeArgs(g.ExcludeNodes, g.ExcludeCountries)...)
-	if g.Proxies["warp"].GenI1 != "" {
-		args = append(args, "-gen-i1", g.Proxies["warp"].GenI1)
+	nodes, countries := effectiveExclusions(g, p)
+	args = append(args, excludeArgs(nodes, countries)...)
+	if p.AWG.Preset != "" {
+		args = append(args, "-jc", strconv.Itoa(p.AWG.JC), "-jmin", strconv.Itoa(p.AWG.JMin), "-jmax", strconv.Itoa(p.AWG.JMax), "-i1", p.AWG.I1)
+	} else if p.GenI1 != "" {
+		args = append(args, "-gen-i1", p.GenI1)
 	}
 	out, err := o.runWarpScout(args, 10*time.Minute)
 	best := strings.TrimSpace(lastNonEmpty(out))
@@ -562,23 +621,27 @@ func (o *Orchestrator) scanWarp(g Settings) {
 			o.log("warp: only endpoints over %dms found (best %dms); keeping warpscout pick", g.MaxPing, bp)
 		}
 	}
-	if !o.publishScanEndpoint("warp", best) {
+	if !o.publishScanEndpoint(key, best, g) {
 		return
 	}
 	o.mu.Lock()
-	o.lastResult = "warp: " + best
+	o.lastResult = key + ": " + best
 	o.mu.Unlock()
-	o.log("warp best endpoint: %s", best)
-	o.applyLive("warp")
+	o.log("%s best endpoint: %s", key, best)
+	o.applyLive(key)
 }
 
 // Publish RAM endpoints under the same lock as config mutations and applies.
 // An obsolete scan cannot repopulate state after its last consumer is disabled.
-func (o *Orchestrator) publishScanEndpoint(key, best string) bool {
+func (o *Orchestrator) publishScanEndpoint(key, best string, expected ...Settings) bool {
 	o.applyMu.Lock()
 	defer o.applyMu.Unlock()
+	current := o.settings.Snapshot()
+	if len(expected) > 0 && !scanIdentityEqual(expected[0], current, key) {
+		return false
+	}
 	needed := false
-	for _, target := range scanTargets(o.settings.Snapshot(), "both", true) {
+	for _, target := range scanTargets(current, "both", true) {
 		needed = needed || target == key
 	}
 	if !needed {
@@ -586,6 +649,10 @@ func (o *Orchestrator) publishScanEndpoint(key, best string) bool {
 	}
 	stateMu.Lock()
 	defer stateMu.Unlock()
+	if stateEp.profiles == nil {
+		stateEp.profiles = map[string]string{}
+	}
+	stateEp.profiles[key] = best
 	if key == "warp" {
 		stateEp.warp = best
 	} else {
@@ -611,6 +678,9 @@ func (o *Orchestrator) applyLive(name string) {
 // QUIC (fixed pool of 2 addresses x 7 ports).
 func (o *Orchestrator) scanMasque(g Settings, key string) {
 	p := g.Proxies[key]
+	if p == nil {
+		p = (&ProxySettings{}).defaults(key)
+	}
 	report := filepath.Join(os.TempDir(), "warpd-scan-"+key+".report.txt")
 	defer os.Remove(report)
 	if err := os.Remove(report); err != nil && !os.IsNotExist(err) {
@@ -623,12 +693,12 @@ func (o *Orchestrator) scanMasque(g Settings, key string) {
 	args := []string{
 		"scan",
 		"-a", account,
-		"-p", p.Protocol,
+		"-p", profileProtocol(key, p),
 		"-P",
 		"-best",
 		"-o", report,
 	}
-	if p.Protocol == "masque-h2" {
+	if profileProtocol(key, p) == "masque-h2" {
 		args = append(args, "-n", fmt.Sprintf("%d", g.ScanSample))
 	}
 	args = append(args, "-jt", fmt.Sprintf("%d", g.ScanJobs))
@@ -645,7 +715,7 @@ func (o *Orchestrator) scanMasque(g Settings, key string) {
 		o.log("%s: %s over max ping, using %s", key, best, alt)
 		best = alt
 	}
-	if !o.publishScanEndpoint(key, best) {
+	if !o.publishScanEndpoint(key, best, g) {
 		return
 	}
 	o.mu.Lock()

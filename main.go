@@ -18,6 +18,10 @@ func main() {
 	_ = os.MkdirAll(filepath.Dir(account), 0700)
 
 	cfg := LoadSettings()
+	if err := cfg.InitProfiles(defaultProfilePath); err != nil {
+		cfg.ProfileError = err.Error()
+		logg.Printf("profiles: %v; proxy runtime stopped, management remains available", err)
+	}
 	if !cfg.Enabled {
 		logg.Printf("disabled in UCI (warpd.global.enabled=0); exiting")
 		return
@@ -54,20 +58,24 @@ func main() {
 	}
 
 	srv := NewServer(cfg, orch)
+	srv.StartRelays(ctx)
 	go func() {
 		<-ctx.Done()
-		mihomo.Stop()
+		srv.accounts.Close()
+		orch.Close()
 		time.Sleep(500 * time.Millisecond)
 		syscall.Exit(0)
 	}()
 
 	if err := srv.ListenAndServe(); err != nil {
+		srv.accounts.Close()
+		orch.Close()
 		logg.Printf("web server error: %v", err)
 		os.Exit(1)
 	}
 }
 
-const version = "2.2.0"
+const version = "3.0.0"
 
 // pinned reports whether the proxy has a manual UCI pin that overrides scans.
 func pinned(p *ProxySettings, e endpoints, name string) bool {

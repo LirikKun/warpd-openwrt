@@ -68,6 +68,13 @@ for external in "$MIHOMO" "$WARPSCOUT"; do
             /usr/libexec/warpd/*|/usr/share/warpd/*|/usr/bin/warpd|/etc/init.d/warpd|/usr/sbin/warpd-uninstall|/etc/config/warpd)
                 fail "Dependency points at an installer-owned path: $external" ;;
         esac
+        case "$path" in
+            /etc/*|*/config|*/config.*|*/config/*|*/configs/*|*.json|*.yaml|*.yml|*.uci|*.conf|*.config|*.key)
+                fail "Dependency points at private data or a service configuration: $external" ;;
+        esac
+    done
+    for private in /etc/config/warpd /etc/warpd/warp-account.json /etc/warpd/profiles.json; do
+        [ ! "$external" -ef "$private" ] || fail "Dependency aliases private data: $external"
     done
 done
 # Conservative release estimates (current bundles: 27-30 MiB compressed,
@@ -101,7 +108,7 @@ ram() {
     [ "$((available * 1024))" -ge "$1" ] || fail 'Insufficient RAM for private /tmp download/extraction'
 }
 OLD=1048576
-for target in /usr/bin/warpd /usr/libexec/warpd/mihomo /usr/libexec/warpd/warpscout /etc/init.d/warpd /usr/sbin/warpd-uninstall /etc/config/warpd; do
+for target in /usr/bin/warpd /usr/libexec/warpd/mihomo /usr/libexec/warpd/warpscout /etc/init.d/warpd /usr/sbin/warpd-uninstall /etc/config/warpd /etc/warpd/profiles.json; do
     if [ -f "$target" ] && [ ! -L "$target" ]; then
         bytes=$(wc -c < "$target")
         OLD=$((OLD + bytes + 4096))

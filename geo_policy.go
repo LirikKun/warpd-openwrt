@@ -12,10 +12,13 @@ type geoCacheKey struct {
 	endpoint, outer, listen          string
 	port                             int
 	excludedNodes, excludedCountries string
+	revision                         uint64
 }
 
 func geoKeyFor(g Settings, generation uint64, ep, outer string, p *ProxySettings) geoCacheKey {
-	return geoCacheKey{generation, ep, outer, p.Listen, p.Port, g.ExcludeNodes, g.ExcludeCountries}
+	n, c := effectiveExclusions(g, p)
+	listen, port := profileProbeAddress(g, p.Key, p)
+	return geoCacheKey{generation, ep, outer, listen, port, n, c, g.Revision}
 }
 func geoEligible(g Settings, res exitParse) bool {
 	return observedNodePolicyError(g, res.node, res.nodeCountry) == "" && knownCountry(res.country) && strings.ToUpper(strings.TrimSpace(res.country)) != "RU"

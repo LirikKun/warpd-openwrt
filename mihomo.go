@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -37,6 +41,7 @@ type MihomoMan struct {
 	lastAccount warpAccount // value copy, advanced only with lastConf
 	started     time.Time
 	generation  uint64
+	gateRevoked chan struct{} // closed before changing/revoking an applied generation
 
 	// Optional per-instance dependencies; the zero value uses production paths.
 	// Configure these before concurrent use.
@@ -47,6 +52,11 @@ type MihomoMan struct {
 	// Explicit test seam. Injecting command/reload alone NEVER bypasses ownership.
 	ownership        func(int, []mihomoListener) error
 	ownershipTimeout time.Duration
+	// Optional constructor dependency; production always uses NewRelayUDPBridge.
+	// It cannot replace mandatory kernel ownership authorization.
+	relayPrepare func(context.Context, RelayUDPConfig) (*RelayUDPBridge, error)
+	relayLeases  map[string]*relayEngineLease
+	relayChild   atomic.Pointer[relayChildIdentity]
 }
 
 // MihomoStatus is one consistent view of the child and its applied config.
@@ -94,6 +104,99 @@ func (m *MihomoMan) refreshExitedLocked() {
 	}
 }
 
+// A gate lease identifies the exact child and applied generation, not merely
+// a port or a recent health result. Never call gate code while holding m.mu.
+type profileGateOwner struct {
+	manager      *MihomoMan
+	cmd          *exec.Cmd
+	done         <-chan struct{}
+	revoked      <-chan struct{}
+	generation   uint64
+	listener     mihomoListener
+	relay        *relayEngineLease
+	relayDone    <-chan struct{}
+	relayExpires time.Time
+}
+
+func (m *MihomoMan) revokeProfileGatesLocked() {
+	m.relayChild.Store(nil)
+	m.revokeRelaysLocked(true)
+	if m.gateRevoked != nil {
+		close(m.gateRevoked)
+		m.gateRevoked = nil
+	}
+}
+
+func (m *MihomoMan) profileGateOwner(status MihomoStatus, target string, ids ...string) *profileGateOwner {
+	address, portText, err := net.SplitHostPort(target)
+	port, portErr := strconv.Atoi(portText)
+	ip := net.ParseIP(address)
+	if err != nil || portErr != nil || port < 1 || port > 65535 || ip == nil || !ip.IsLoopback() {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refreshExitedLocked()
+	if !m.running || m.pid != status.PID || m.generation != status.Generation || m.lastConf == "" || m.desiredConf != m.lastConf {
+		return nil
+	}
+	listeners, err := mihomoListeners(m.lastConf)
+	if err != nil {
+		return nil
+	}
+	want := mihomoListener{address, port}
+	found := false
+	for _, listener := range listeners[1:] {
+		found = found || listener == want
+	}
+	if err != nil || !found || m.checkOwnership(m.pid, []mihomoListener{want}) != nil {
+		return nil
+	}
+	if m.gateRevoked == nil {
+		m.gateRevoked = make(chan struct{})
+	}
+	owner := &profileGateOwner{manager: m, cmd: m.cmd, done: m.done, revoked: m.gateRevoked, generation: m.generation, listener: want}
+	if len(ids) > 0 {
+		if lease := m.relayLeases[ids[0]]; lease != nil {
+			if lease.bridge == nil || !lease.live.Load() || !time.Now().Before(lease.bridge.expires) {
+				return nil
+			}
+			owner.relay = lease
+			owner.relayDone = lease.bridge.Done()
+			owner.relayExpires = lease.bridge.expires
+		}
+	}
+	return owner
+}
+
+// Check at the data-plane boundary, both before dialing and before writing any
+// SOCKS bytes. /proc listener inodes must still belong to this exact child.
+func (owner *profileGateOwner) valid() bool {
+	m := owner.manager
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refreshExitedLocked()
+	select {
+	case <-owner.revoked:
+		return false
+	default:
+	}
+	select {
+	case <-owner.done:
+		return false
+	default:
+	}
+	select {
+	case <-owner.relayDone:
+		return false
+	default:
+	}
+	if owner.relay != nil && (!owner.relay.live.Load() || !time.Now().Before(owner.relayExpires)) {
+		return false
+	}
+	return m.running && m.cmd == owner.cmd && m.done == owner.done && m.generation == owner.generation && m.lastConf != "" && m.desiredConf == m.lastConf && m.checkOwnership(m.pid, []mihomoListener{owner.listener}) == nil
+}
+
 var mihomo = &MihomoMan{}
 
 // mihomoConfText renders the full proxy set from live settings + endpoints.
@@ -108,20 +211,38 @@ func mihomoConfText(g Settings, e endpoints, acc warpAccount) string {
 	fmt.Fprintf(&b, "external-controller: %s\n", mihomoAPI)
 	b.WriteString("dns: { enable: false }\nproxies:\n")
 
-	awg := func(name, endpoint string, extra ...string) {
+	awg := func(name, endpoint string, p *ProxySettings, credential *RelayCredential, extra ...string) {
+		acc := acc
+		if credential != nil {
+			acc = warpAccount{PrivateKey: credential.PrivateKey, PeerPub: credential.PeerPublicKey, IPv4: strings.TrimSuffix(credential.TunnelIPv4, "/32"), IPv6: strings.TrimSuffix(credential.TunnelIPv6, "/128")}
+		}
 		fmt.Fprintf(&b, "  - name: %q\n    type: wireguard\n", name)
 		fmt.Fprintf(&b, "    private-key: %s\n", acc.PrivateKey)
 		fmt.Fprintf(&b, "    ip: %s\n", acc.IPv4)
 		fmt.Fprintf(&b, "    peers:\n      - server: %s\n        port: %s\n", host(endpoint), port(endpoint))
 		fmt.Fprintf(&b, "        public-key: %s\n", acc.PeerPub)
 		b.WriteString("        allowed-ips: ['0.0.0.0/0']\n        persistent-keepalive: 25\n")
-		b.WriteString("    amnezia-wg-option:\n      jc: 6\n      jmin: 10\n      jmax: 50\n      s1: 0\n      s2: 0\n      h1: 1\n      h2: 2\n      h3: 3\n      h4: 4\n")
-		if acc.GenI1 != "" {
-			fmt.Fprintf(&b, "      i1: %s\n", acc.GenI1)
-		} else {
-			b.WriteString("      i1: <r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>\n")
+		a := p.AWG
+		if a.Preset == "" {
+			a = DefaultAWGOptions()
+			a.I1 = firstNonEmpty(p.GenI1, acc.GenI1, a.I1)
 		}
-		b.WriteString("    udp: true\n    remote-dns-resolve: true\n    dns: [\"1.1.1.1\", \"1.0.0.1\"]\n")
+		fmt.Fprintf(&b, "    amnezia-wg-option:\n      jc: %d\n      jmin: %d\n      jmax: %d\n      s1: %d\n      s2: %d\n      h1: %d\n      h2: %d\n      h3: %d\n      h4: %d\n      i1: %q\n", a.JC, a.JMin, a.JMax, a.S1, a.S2, a.H1, a.H2, a.H3, a.H4, a.I1)
+		if credential == nil {
+			b.WriteString("    udp: true\n    remote-dns-resolve: true\n    dns: [\"1.1.1.1\", \"1.0.0.1\"]\n")
+		} else {
+			b.WriteString("    udp: true\n    remote-dns-resolve: false\n")
+			if acc.IPv6 != "" {
+				fmt.Fprintf(&b, "    ipv6: %s\n", acc.IPv6)
+			}
+			if credential.DNS != "" {
+				fmt.Fprintf(&b, "    dns: [%s]\n", credential.DNS)
+			}
+			if credential.Reserved != "" {
+				reserved, _ := base64.StdEncoding.DecodeString(credential.Reserved)
+				fmt.Fprintf(&b, "    reserved: [%d, %d, %d]\n", reserved[0], reserved[1], reserved[2])
+			}
+		}
 		for _, x := range extra {
 			b.WriteString(x)
 		}
@@ -145,63 +266,97 @@ func mihomoConfText(g Settings, e endpoints, acc warpAccount) string {
 		b.WriteString("    mtu: 1280\n")
 	}
 
-	// warp
-	if p := g.Proxies["warp"]; p.Enabled {
-		ep := firstNonEmpty(p.Endpoint, e.warp)
-		if ep != "" {
-			awg("WARP", ep, fmt.Sprintf("    mtu: 1280\n"))
+	served := map[string]string{}
+	for _, id := range profileIDs(g) {
+		p := g.Proxies[id]
+		if !effectiveEnabled(g, p) {
+			continue
 		}
-	}
-	if p := g.Proxies["masque"]; p.Enabled {
-		ep := firstNonEmpty(p.Endpoint, e.masque["masque"])
-		if ep != "" {
-			masq("MASQUE", ep, "")
+		ep, outer := profileLiveEndpoint(id, p, e)
+		if ep == "" {
+			continue
 		}
-	}
-	if p := g.Proxies["masqueh2"]; p.Enabled {
-		ep := firstNonEmpty(p.Endpoint, e.masque["masqueh2"])
-		if ep != "" {
-			masq("MASQUEH2", ep, "h2")
+		name := profileEngineName(id, p)
+		switch profileType(id, p) {
+		case "warp":
+			awg(name, ep, p, nil, "    mtu: 1280\n")
+		case "relay-warp":
+			addr, err := netip.ParseAddrPort(ep)
+			if err != nil || !addr.Addr().Is4() || !addr.Addr().IsLoopback() || addr.Port() == 0 || !relayCredentialConfigured(p) {
+				continue
+			}
+			mtu := p.Credential.MTU
+			if mtu == 0 {
+				mtu = 1280
+			}
+			awg(name, ep, p, &p.Credential, fmt.Sprintf("    mtu: %d\n", mtu))
+		case "masque":
+			network := ""
+			if profileProtocol(id, p) == "masque-h2" {
+				network = "h2"
+			}
+			masq(name, ep, network)
+		case "legacy-m2w":
+			if outer == "" || outer == ep {
+				continue
+			}
+			masq(name+" OUTER", outer, "")
+			awg(name+" INNER", ep, p, nil, fmt.Sprintf("    mtu: 1250\n    dialer-proxy: %q\n", name+" OUTER"))
+			name += " INNER"
+		default:
+			continue // Relay tunnel compatibility is unverified; never substitute direct WARP.
 		}
+		served[id] = name
 	}
-	m2wReady := false
-	if p := g.Proxies["m2w"]; p.Enabled {
-		mep := firstNonEmpty(p.Outer, e.masque["masque"])
-		wep := firstNonEmpty(p.Inner, e.warp)
-		if mep != "" && wep != "" && mep != wep {
-			masq("M2W OUTER", mep, "")
-			awg("M2W INNER", wep, "    mtu: 1250\n    dialer-proxy: \"M2W OUTER\"\n")
-			m2wReady = true
-		}
-	}
-
 	b.WriteString("listeners:\n")
-	listener := func(p *ProxySettings, name string) {
-		if name != "" {
-			fmt.Fprintf(&b, "  - name: l%d\n    type: socks\n    listen: %q\n    port: %d\n    proxy: %q\n", p.Port, p.Listen, p.Port, name)
+	for _, id := range profileIDs(g) {
+		name := served[id]
+		if name == "" {
+			continue
 		}
-	}
-	if p := g.Proxies["warp"]; p.Enabled && (p.Endpoint != "" || e.warp != "") {
-		listener(p, "WARP")
-	}
-	if p := g.Proxies["masque"]; p.Enabled && (p.Endpoint != "" || e.masque["masque"] != "") {
-		listener(p, "MASQUE")
-	}
-	if p := g.Proxies["masqueh2"]; p.Enabled && (p.Endpoint != "" || e.masque["masqueh2"] != "") {
-		listener(p, "MASQUEH2")
-	}
-	if p := g.Proxies["m2w"]; m2wReady {
-		listener(p, "M2W INNER")
+		p := g.Proxies[id]
+		listen, port := profileProbeAddress(g, id, p)
+		fmt.Fprintf(&b, "  - name: l%d\n    type: socks\n    listen: %q\n    port: %d\n    proxy: %q\n", port, listen, port, name)
 	}
 	return b.String()
 }
 
 // Ensure runs mihomo with the current config, reloading when it changes.
-func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
+func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) (result error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.refreshExitedLocked()
+	e, relayPending := m.prepareRelaysLocked(g, e, acc)
+	committed := false
+	defer func() {
+		if !committed {
+			m.revokeRelaysLocked(false)
+			for id, p := range g.Proxies {
+				if effectiveEnabled(g, p) && profileType(id, p) == "relay-warp" {
+					getCheck(id).set(func(st *ProxyState) { st.Error = "pending: Relay runtime apply failed" })
+				}
+			}
+		}
+	}()
+	ordinary, prepared := false, false
+	for id, p := range g.Proxies {
+		if effectiveEnabled(g, p) {
+			if profileType(id, p) != "relay-warp" {
+				ordinary = true
+			} else if lease := m.relayLeases[id]; lease != nil && lease.bridge != nil {
+				prepared = true
+			}
+		}
+	}
+	if !ordinary && !prepared && relayPending != nil {
+		m.stopLocked(true)
+		committed = true
+		return relayPending
+	}
 	conf := mihomoConfText(g, e, acc)
+	if conf != m.desiredConf {
+		m.revokeProfileGatesLocked()
+	}
 	m.desiredConf = conf
 	if m.running {
 		listeners, err := mihomoListeners(m.lastConf)
@@ -214,7 +369,8 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 		}
 	}
 	if m.running && conf == m.lastConf {
-		return nil
+		committed = true
+		return m.finishRelayApplyLocked(g, e, relayPending)
 	}
 	configPath := firstNonEmpty(m.configPath, mihomoConf)
 	listeners, err := mihomoListeners(conf)
@@ -251,11 +407,12 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 			m.lastAccount = acc
 			m.generation++
 			logg.Printf("mihomo reloaded (pid %d)", m.pid)
-			return nil
+			committed = true
+			return m.finishRelayApplyLocked(g, e, relayPending)
 		} else {
 			logg.Printf("mihomo reload failed (%v), restarting process", err)
 		}
-		m.stopLocked()
+		m.stopLocked(true)
 	}
 	if err := m.checkCollisions(0, listeners); err != nil {
 		return err
@@ -305,7 +462,8 @@ func (m *MihomoMan) Ensure(g Settings, e endpoints, acc warpAccount) error {
 	m.lastAccount = acc
 	m.generation++
 	logg.Printf("mihomo started (pid %d)", m.pid)
-	return nil
+	committed = true
+	return m.finishRelayApplyLocked(g, e, relayPending)
 }
 
 // Reload success must also prove that removed listeners no longer belong to
@@ -415,7 +573,11 @@ func (m *MihomoMan) waitOwnershipLocked(listeners []mihomoListener) error {
 	}
 }
 
-func (m *MihomoMan) stopLocked() {
+func (m *MihomoMan) stopLocked(preservePrepared ...bool) {
+	m.revokeProfileGatesLocked()
+	if len(preservePrepared) == 0 || !preservePrepared[0] {
+		m.revokeRelaysLocked(false)
+	}
 	if m.cmd != nil && m.cmd.Process != nil {
 		_ = m.cmd.Process.Signal(syscall.SIGTERM)
 		timer := time.NewTimer(1500 * time.Millisecond)
