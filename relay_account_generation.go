@@ -209,9 +209,10 @@ func generateRelayAccount(ctx context.Context, binary, root string) (RelayCreden
 	if cleanupErr != nil || runErr != nil || ctx.Err() != nil || openErr != nil {
 		return fail()
 	}
-	// Only the pinned account envelope is accepted. Registration IDs, tokens and
-	// optional MASQUE fields are recognized then deliberately discarded; they are
-	// not tunnel parameters. Unknown fields/outer chain imports fail closed.
+	// Only the pinned fresh-account envelope is accepted. Registration IDs,
+	// tokens and optional MASQUE/outer WG fields are recognized then discarded;
+	// only the primary device supplies tunnel parameters. Unknown fields and
+	// nested outer chains still fail closed.
 	type device struct {
 		ID            string `json:"id"`
 		Token         string `json:"token"`
@@ -228,6 +229,7 @@ func generateRelayAccount(ctx context.Context, binary, root string) (RelayCreden
 		IPv4          string  `json:"ipv4"`
 		IPv6          string  `json:"ipv6"`
 		Masque        *device `json:"masque"`
+		Outer         *device `json:"outer"`
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	if privateProfileValue(d, reflect.TypeOf(result), 0) != nil {
