@@ -790,7 +790,7 @@
       </details>
       </section>
       <footer id="footer">warpd · данные ещё не получены</footer>
-      <p id="credits" class="micro muted">Relay · <a href="https://github.com/nellimonix" rel="noreferrer">llimonix</a> · <a href="https://github.com/nellimonix/warp-config-generator-vercel" rel="noreferrer">warp-config-generator-vercel</a></p>
+      <p id="credits" class="micro muted">Relay-сервис — <a href="https://github.com/nellimonix" rel="noreferrer">llimonix</a></p>
     </main>
     <script>
       'use strict';
@@ -2036,7 +2036,6 @@
             input.focus();
             input.select();
           });
-          identity.append(rename);
           main.append(identity, health, control);
           const details = element('details', { id: name + '-details' });
           details.append(element('summary', {}, 'Подключение и детали'));
@@ -2088,7 +2087,9 @@
               : []),
           ])
             addFact(dl, name + '-' + key, label);
-          content.append(dl);
+          const profileActions = element('div', { class: 'actions' });
+          profileActions.append(rename);
+          content.append(profileActions, dl);
           const form = element('form', {
               id: name + '-pinform',
               class: 'pin-editor',

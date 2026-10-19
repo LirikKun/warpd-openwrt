@@ -59,6 +59,11 @@ for (const language of ['ru', 'en']) {
         const button = byId(a, p.id + '-rename');
         assert.ok(button, 'rename action for ' + p.type);
         assert.equal(button.textContent, language === 'en' ? 'Rename' : 'Переименовать');
+        const details = byId(a, p.id + '-details');
+        assert.ok(details.contains(button), 'rename belongs inside Connection and details');
+        assert.equal(byId(a, 'row-' + p.id).querySelector('.service-main').contains(button), false);
+        assert.equal(details.open, false, 'rename stays behind the initially collapsed details');
+        details.open = true;
         button.click();
         const input = byId(a, p.id + '-name');
         assert.equal(byId(a, p.id + '-details').open, true);

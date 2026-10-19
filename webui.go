@@ -35,6 +35,7 @@ func makeEnglishWebUI(pairs ...string) *strings.Replacer {
 }
 
 var englishWebUI = makeEnglishWebUI(
+	"Relay-сервис", "Relay service",
 	"Политика: отключена", "Policy: off",
 	"Мониторинг включён · туннель — в профиле прокси", "Monitoring enabled · tunnel status in proxy profile",
 	"Разделы", "Sections",

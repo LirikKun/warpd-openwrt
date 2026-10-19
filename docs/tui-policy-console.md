@@ -6,7 +6,7 @@ This guide describes the v3.1.0 console and per-profile policy; the installer ta
 
 - Four sections: Proxies, Relay, Search, Settings. Navigation preserves drafts.
 - Monospace, flat borders, light/dark system preference and narrow-screen layout; no external fonts or frontend dependencies on the router.
-- Each proxy has a Rename action. Saving a name changes only that profile.
+- Each proxy has a Rename action inside Connection and details. Saving a name changes only that profile.
 - Relay remains separate. Only the activation link is visible in the basic creation form. A new Relay is saved disabled; saving does not activate it or register an account.
 - Source IP/interface, path acknowledgement and monitoring interval are under Advanced. URL-only saving works, but automatic source selection is not implemented: first activation still requires a configured, acknowledged outgoing path. An unconfigured enable opens the relevant settings instead of inventing consent.
 - Relay proxy details show the configured remote server, not the private loopback bridge. Server country is not a guarantee of public-IP country.
@@ -23,9 +23,9 @@ A country change is detected by periodic health/geolocation checks, not per pack
 
 Existing profiles without an explicit policy retain compatibility behavior until the user changes it. An unrelated name edit must not silently migrate their policy.
 
-## Attribution
+## Service acknowledgement
 
-Relay: [llimonix](https://github.com/nellimonix), [warp-config-generator-vercel](https://github.com/nellimonix/warp-config-generator-vercel).
+Thanks to [llimonix](https://github.com/nellimonix) for the external Relay service. warpd uses its own client implementation; no code from the service's project is included.
 
 ## Offline verification
 

@@ -104,7 +104,7 @@ warpd-uninstall --purge
 
 ## Credits
 
-Relay: [llimonix](https://github.com/nellimonix) · [warp-config-generator-vercel](https://github.com/nellimonix/warp-config-generator-vercel).
+Thanks to [llimonix](https://github.com/nellimonix) for the external Relay service. warpd uses its own client implementation; no code from the service's project is included.
 
 ## Help and references
 
