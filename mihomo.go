@@ -221,7 +221,12 @@ func mihomoConfText(g Settings, e endpoints, acc warpAccount) string {
 		fmt.Fprintf(&b, "    ip: %s\n", acc.IPv4)
 		fmt.Fprintf(&b, "    peers:\n      - server: %s\n        port: %s\n", host(endpoint), port(endpoint))
 		fmt.Fprintf(&b, "        public-key: %s\n", acc.PeerPub)
-		b.WriteString("        allowed-ips: ['0.0.0.0/0']\n        persistent-keepalive: 25\n")
+		if credential != nil && acc.IPv6 != "" {
+			b.WriteString("        allowed-ips: ['0.0.0.0/0', '::/0']\n")
+		} else {
+			b.WriteString("        allowed-ips: ['0.0.0.0/0']\n")
+		}
+		b.WriteString("        persistent-keepalive: 25\n")
 		a := p.AWG
 		if a.Preset == "" {
 			a = DefaultAWGOptions()
@@ -231,12 +236,16 @@ func mihomoConfText(g Settings, e endpoints, acc warpAccount) string {
 		if credential == nil {
 			b.WriteString("    udp: true\n    remote-dns-resolve: true\n    dns: [\"1.1.1.1\", \"1.0.0.1\"]\n")
 		} else {
-			b.WriteString("    udp: true\n    remote-dns-resolve: false\n")
+			// Resolve destinations inside the tunnel: the host resolver may return
+			// Fake-IP addresses meaningful only to an adjacent transparent proxy.
+			b.WriteString("    udp: true\n    remote-dns-resolve: true\n")
 			if acc.IPv6 != "" {
 				fmt.Fprintf(&b, "    ipv6: %s\n", acc.IPv6)
 			}
 			if credential.DNS != "" {
 				fmt.Fprintf(&b, "    dns: [%s]\n", credential.DNS)
+			} else {
+				b.WriteString("    dns: [\"1.1.1.1\", \"1.0.0.1\"]\n")
 			}
 			if credential.Reserved != "" {
 				reserved, _ := base64.StdEncoding.DecodeString(credential.Reserved)
