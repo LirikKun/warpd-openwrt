@@ -129,7 +129,7 @@ child, including disabled children, before deleting a resource.
 
 The reviewed runtime passed **800 full Go tests and 800 race tests**, `go vet`
 and an ARM64 build. These are reused runtime results, not a new full-suite run
-for this documentation update. See [README release verification](../README.md#release-verification).
+for the installation-entrypoint and documentation update.
 
 On **2026-10-19**, bounded live acceptance on **ARM64 OpenWrt, Filogic 820**, with
 **Mihomo 1.19.31 / WarpScout 0.16.0**, established:

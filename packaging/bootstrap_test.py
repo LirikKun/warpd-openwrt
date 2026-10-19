@@ -18,8 +18,10 @@ curl consent and check-only; curl is now required for bounded asset downloads.
 All payloads/adapters here are TEST fixtures, never release binaries. Download
 and package boundaries are isolated, not exposed as production overrides.
 """
+import fcntl
 import hashlib
 import importlib.util
+import termios
 import io
 import os
 from pathlib import Path
@@ -33,7 +35,7 @@ import tempfile
 import time
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'install.sh'
+SCRIPT = Path(__file__).resolve().parents[1] / 'install-warpd.sh'
 TOOLS = 'sh id uname cat cp mv chmod mkdir dirname readlink grep wc ls df awk mktemp rm rmdir ln sleep date tar gzip sha256sum'.split()
 
 
@@ -107,13 +109,20 @@ esac
         digest = hashlib.sha256((self.base / 'bundle.tar.gz').read_bytes()).hexdigest()
         (self.base / 'SHA256SUMS').write_text(digest + '  ' + self.name + '.tar.gz\n')
 
-    def run_script(self, *flags, tty_input=None):
+    def run_script(self, *flags, tty_input=None, piped=False):
         cmd = ['bwrap', '--unshare-user', '--uid', '0', '--gid', '0', '--unshare-pid', '--unshare-net', '--die-with-parent', '--ro-bind', '/', '/', '--ro-bind', '/usr/lib', '/mnt', '--bind', str(self.root / 'lib'), '/usr/lib', '--bind', str(self.base), '/opt', '--bind', str(self.root / 'etc'), '/etc', '--bind', str(self.root / 'tmp'), '/tmp', '--bind', str(self.root / 'usr/libexec'), '/usr/libexec', '--bind', str(self.root / 'tools'), '/media', '--proc', '/proc', '--dev', '/dev', '--setenv', 'PATH', '/media', *getattr(self, 'shell', ['/bin/sh']), str(SCRIPT), *flags]
+        if piped:
+            shell = getattr(self, 'shell', ['/bin/sh'])
+            invocation = 'cat ' + shlex.quote(str(SCRIPT)) + ' | ' + shlex.join([*shell, '-s', '--', *flags])
+            cmd = cmd[:-(len(shell) + 1 + len(flags))] + ['/bin/sh', '-c', invocation]
         if tty_input is None:
-            result = subprocess.run(cmd, input='', text=True, capture_output=True, timeout=25)
+            result = subprocess.run(cmd, input='', text=True, capture_output=True, timeout=25, start_new_session=True)
         else:
             master, slave = pty.openpty()
-            process = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave)
+            def controlling_terminal():
+                os.setsid()
+                fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+            process = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, preexec_fn=controlling_terminal)
             os.close(slave)
             os.write(master, tty_input.encode())
             output = bytearray()
@@ -153,6 +162,63 @@ esac
                                          '--connect-timeout', '15', '--max-time', '180', '-o'])
             self.assertTrue(args[-2].startswith('/tmp/warpd-bootstrap.'), args)
             self.assertEqual(args[-1], 'https://github.com/LirikKun/warpd-openwrt/releases/download/v3.0.0/' + self.name + suffix)
+
+    def test_public_install_upgrade_entrypoint_exists(self):
+        public = SCRIPT.parent / 'install-warpd.sh'
+        self.assertTrue(public.is_file(), 'shared public install/upgrade script is missing')
+        public_help = subprocess.run(['sh', str(public), '--help'], capture_output=True, text=True, timeout=5, check=True)
+        self.assertIn('install-warpd.sh', public_help.stdout)
+
+    def test_pipe_install_and_upgrade_prompt_using_controlling_terminal(self):
+        self.missing_network_requirements()
+        self.package_manager('apk')
+        result = self.run_script(tty_input='y\n2\n', piped=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Установить', result.stdout)
+        self.assertIn('UI language', result.stdout)
+        self.assertEqual((self.base / 'invoked').read_text().splitlines(), ['--language', 'ru'])
+        self.put('etc/config/warpd', '# saved operator config\n')
+        self.put('etc/warpd/profiles.json', 'SYNTHETIC PRIVATE PROFILE\n')
+        self.put('etc/warpd/warp-account.json', 'SYNTHETIC PRIVATE ACCOUNT\n')
+        before = {p: p.read_bytes() for p in (self.root / 'etc').rglob('*') if p.is_file()}
+        result = self.run_script(tty_input='\n', piped=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.base / 'invoked').read_text(), '\n')
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+        self.clean()
+
+    def test_pipe_decline_and_eof_never_install_packages(self):
+        self.missing_network_requirements()
+        self.package_manager('opkg')
+        for reply in ('n\n', '\x04'):
+            with self.subTest(reply=reply):
+                result = self.run_script(tty_input=reply, piped=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((self.base / 'events').exists())
+                self.assertFalse((self.base / 'invoked').exists())
+                self.clean()
+
+    def test_pipe_without_terminal_requires_explicit_package_consent(self):
+        self.missing_network_requirements()
+        self.package_manager('apk')
+        result = self.run_script(piped=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('rerun with --yes', result.stderr)
+        self.assertFalse((self.base / 'events').exists())
+        result = self.run_script('--yes', '--language', 'ru', piped=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.base / 'invoked').read_text().splitlines(), ['--language', 'ru'])
+        self.clean()
+
+    def test_busybox_pipe_language_selection_uses_terminal_not_script(self):
+        busybox = os.environ.get('WARPD_TEST_BUSYBOX') or shutil.which('busybox')
+        if not busybox:
+            self.skipTest('set WARPD_TEST_BUSYBOX for BusyBox ash pipe coverage')
+        self.shell = [str(Path(busybox).resolve()), 'ash']
+        result = self.run_script(tty_input='2\n', piped=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.base / 'invoked').read_text().splitlines(), ['--language', 'ru'])
+        self.clean()
 
     def test_fresh_download_verifies_and_invokes_exact_release(self):
         result = self.run_script()

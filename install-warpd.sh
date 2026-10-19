@@ -26,7 +26,7 @@ while [ "$#" -gt 0 ]; do
                     esac ;;
             esac
             shift 2 ;;
-        --help) printf '%s\n' 'Usage: sh install.sh [--yes] [--check-only] [--version X.Y.Z] [--language en|ru] [--mihomo /absolute/path] [--warpscout /absolute/path]'; exit 0 ;;
+        --help) printf '%s\n' 'Usage: sh install-warpd.sh [--yes] [--check-only] [--version X.Y.Z] [--language en|ru] [--mihomo /absolute/path] [--warpscout /absolute/path]'; exit 0 ;;
         *) fail "Unknown argument: $1" ;;
     esac
 done
@@ -120,14 +120,26 @@ NEW=12582912
 [ -n "$WARPSCOUT" ] || NEW=$((NEW + 6291456))
 peak_space 130023424
 ram 130023424
+# With wget | ash, stdin contains shell code, not prompt answers. Keep it intact
+# and read the controlling terminal through a separate descriptor instead.
+INTERACTIVE=0
+if [ -t 1 ]; then
+    if [ -t 0 ]; then
+        exec 3<&0
+        INTERACTIVE=1
+    elif ( : < /dev/tty ) 2>/dev/null; then
+        exec 3< /dev/tty
+        INTERACTIVE=1
+    fi
+fi
 if [ -n "$PACKAGES" ]; then
     printf 'Missing required packages: %s\n' "$PACKAGES"
     [ "$CHECK" = 0 ] || fail 'Requirements missing; check-only made no changes'
     if [ "$YES" != 1 ]; then
-        [ -t 0 ] && [ -t 1 ] || fail 'Missing requirements; rerun with --yes to permit package installation in noninteractive mode'
+        [ "$INTERACTIVE" = 1 ] || fail 'Missing requirements; rerun with --yes to permit package installation in noninteractive mode'
         printf '%s' 'Install missing packages / Установить недостающие пакеты? [y/N]: '
         answer=
-        IFS= read -r answer || fail 'No consent (EOF); no packages changed'
+        IFS= read -r answer <&3 || fail 'No consent (EOF); no packages changed'
         case "$answer" in y|Y|yes|YES|да|Да) ;; *) fail 'Package installation declined / Установка пакетов отменена' ;; esac
     fi
     if command -v apk >/dev/null 2>&1; then PM=apk; ACTION=add
@@ -143,14 +155,14 @@ if [ -n "$PACKAGES" ]; then
 fi
 printf '%s\n' 'Requirements ready.'
 [ "$CHECK" = 0 ] || exit 0
-if [ -z "$LANGUAGE" ] && [ -t 0 ] && [ -t 1 ]; then
+if [ -z "$LANGUAGE" ] && [ "$INTERACTIVE" = 1 ]; then
     if [ -e /etc/config/warpd ]; then
         printf '%s' 'UI language / Язык: 1 English, 2 Русский [Enter: keep / сохранить]: '
     else
         printf '%s' 'UI language / Язык: 1 English, 2 Русский [1]: '
     fi
     answer=
-    IFS= read -r answer || answer=
+    IFS= read -r answer <&3 || answer=
     case "$answer" in
         1|en|English) LANGUAGE=en ;;
         2|ru|Русский) LANGUAGE=ru ;;
