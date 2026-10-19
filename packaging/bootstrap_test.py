@@ -72,8 +72,8 @@ while [ "$#" -gt 0 ]; do
 done
 [ ! -f /opt/fail-download ] || exit 22
 case "$url" in
- https://github.com/LirikKun/warpd-openwrt/releases/download/v3.1.1/warpd-3.1.1-linux-*.tar.gz.sha256) cp /opt/SHA256SUMS "$out";;
- https://github.com/LirikKun/warpd-openwrt/releases/download/v3.1.1/warpd-3.1.1-linux-*.tar.gz) cp /opt/bundle.tar.gz "$out";;
+ https://github.com/LirikKun/warpd-openwrt/releases/download/v3.1.2/warpd-3.1.2-linux-*.tar.gz.sha256) cp /opt/SHA256SUMS "$out";;
+ https://github.com/LirikKun/warpd-openwrt/releases/download/v3.1.2/warpd-3.1.2-linux-*.tar.gz) cp /opt/bundle.tar.gz "$out";;
  *) exit 93;;
 esac
 ''', 0o755)
@@ -88,7 +88,7 @@ esac
         target.write_text(data)
         target.chmod(mode)
 
-    def bundle(self, extra=None, version='3.1.1'):
+    def bundle(self, extra=None, version='3.1.2'):
         self.arch = 'amd64' if os.uname().machine == 'x86_64' else 'arm64'
         self.name = 'warpd-' + version + '-linux-' + self.arch
         files = {name: b'TEST fixture\n' for name in ('uninstall.sh', 'bin/warpd', 'bin/mihomo', 'bin/warpscout', 'files/warpd.init', 'files/warpd.config', 'README.md', 'THIRD_PARTY.md', 'licenses/warpscout-MIT.txt', 'licenses/mihomo-GPL-3.0.txt')}
@@ -161,7 +161,7 @@ esac
             self.assertEqual(args[:-2], ['curl', '-fL', '--proto', '=https', '--proto-redir', '=https',
                                          '--connect-timeout', '15', '--max-time', '180', '-o'])
             self.assertTrue(args[-2].startswith('/tmp/warpd-bootstrap.'), args)
-            self.assertEqual(args[-1], 'https://github.com/LirikKun/warpd-openwrt/releases/download/v3.1.1/' + self.name + suffix)
+            self.assertEqual(args[-1], 'https://github.com/LirikKun/warpd-openwrt/releases/download/v3.1.2/' + self.name + suffix)
 
     def test_public_install_upgrade_entrypoint_exists(self):
         public = SCRIPT.parent / 'install-warpd.sh'
@@ -225,7 +225,7 @@ esac
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.base / 'invoked').exists(), 'bundle installer was not invoked')
         events = (self.base / 'events').read_text()
-        self.assertIn('/v3.1.1/' + self.name + '.tar.gz', events)
+        self.assertIn('/v3.1.2/' + self.name + '.tar.gz', events)
         self.assertIn('--proto =https', events)
         self.assert_bounded_downloads(events.splitlines())
         self.assertIn('complete', result.stdout.lower())
@@ -233,13 +233,13 @@ esac
 
     def test_explicit_previous_3_0_0_version_remains_supported(self):
         self.bundle(version='3.0.0')
-        self.put('tools/curl', (self.root / 'tools/curl').read_text().replace('3.1.1', '3.0.0'), 0o755)
+        self.put('tools/curl', (self.root / 'tools/curl').read_text().replace('3.1.2', '3.0.0'), 0o755)
         result = self.run_script('--version', '3.0.0')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.base / 'invoked').exists())
         events = (self.base / 'events').read_text()
         self.assertIn('/v3.0.0/' + self.name + '.tar.gz', events)
-        self.assertNotIn('/v3.1.1/', events)
+        self.assertNotIn('/v3.1.2/', events)
         self.clean()
 
     def test_options_validate_before_network_or_mutation(self):
@@ -339,9 +339,12 @@ esac
         self.assertEqual((self.base / 'invoked').read_text().splitlines(), ['--language', 'en'])
 
     def test_external_dependencies_forward_exact_args_and_reject_owned_paths_early(self):
+        # Keep this full-bundle forwarding fixture on the historical release.
+        self.bundle(version='3.1.1')
+        self.put('tools/curl', (self.root / 'tools/curl').read_text().replace('3.1.2', '3.1.1'), 0o755)
         self.put('tmp/shared mihomo;sentinel', '#!/bin/sh\nexit 0\n', 0o755)
         self.put('tmp/scout', '#!/bin/sh\nexit 0\n', 0o755)
-        result = self.run_script('--mihomo', '/tmp/shared mihomo;sentinel', '--warpscout', '/tmp/scout')
+        result = self.run_script('--version', '3.1.1', '--mihomo', '/tmp/shared mihomo;sentinel', '--warpscout', '/tmp/scout')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.base / 'invoked').read_text().splitlines(), ['--mihomo', '/tmp/shared mihomo;sentinel', '--warpscout', '/tmp/scout'])
         (self.base / 'events').unlink()
@@ -354,7 +357,7 @@ esac
     def test_outer_manifest_accepts_other_assets_but_checks_exact_selected_row(self):
         manifest = self.base / 'SHA256SUMS'
         original = manifest.read_text()
-        manifest.write_text(original + 'a' * 64 + '  warpd-3.1.1-openwrt-other.tar.gz\n')
+        manifest.write_text(original + 'a' * 64 + '  warpd-3.1.2-openwrt-other.tar.gz\n')
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for bad in (original + original, original.replace(self.name + '.tar.gz', '../escape'), original.replace('  ', ' extra '), original.replace(original[:64], '0' * 64)):
@@ -380,11 +383,13 @@ esac
 
     def test_space_preflight_blocks_before_download_and_rechecks_before_extract(self):
         for location in ('/tmp', '/usr'):
+            (self.base / 'events').unlink(missing_ok=True)
             self.put('tools/df', '#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\n"\ncase "$2" in ' + location + ') n=1;; *) n=999999;; esac\nprintf "fixture 999999 0 %s 0%% %s\\n" "$n" "$2"\n', 0o755)
             result = self.run_script()
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn('space', result.stderr.lower())
-            self.assertFalse((self.base / 'events').exists())
+            self.assertEqual((self.base / 'events').exists(), location == '/usr')
+            self.assertFalse((self.base / 'invoked').exists())
             self.clean()
         self.put('tools/df', '''#!/bin/sh
 n=999999
@@ -546,7 +551,7 @@ exec /bin/sh "$@"
             target = self.base / ('test-' + name)
             target.write_text('#!/bin/sh\n# TEST payload\nexit 0\n')
             binaries[name] = target
-        archive = builder.create_archive(SCRIPT.parent, binaries, self.base / 'built', '3.1.1', self.arch, 0)
+        archive = builder.create_archive(SCRIPT.parent, binaries, self.base / 'built', '3.1.2', self.arch, 0)
         shutil.copy2(archive, self.base / 'bundle.tar.gz')
         digest = hashlib.sha256((self.base / 'bundle.tar.gz').read_bytes()).hexdigest()
         (self.base / 'SHA256SUMS').write_text(digest + '  ' + self.name + '.tar.gz\n')
@@ -585,11 +590,19 @@ exec /bin/sh "$script" --root /opt/destination "$@"
         self.assertIn('jsonfilter', result.stdout + result.stderr)
 
     def test_shared_filesystem_budgets_download_extraction_and_transaction_together(self):
-        self.put('tools/df', '#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 999999 0 153600 0%% /\\n"\n', 0o755)
+        # Exact sizes replace the old 124 MiB speculative initial estimate.
+        with tarfile.open(self.base / 'bundle.tar.gz') as tar:
+            members = [m for m in tar if m.isfile()]
+        expanded = sum(m.size for m in members)
+        new = sum(m.size + 4096 for m in members) + 262144
+        required = expanded + 1048576 + 1048576 + new
+        below_kb = (required + 1023) // 1024 - 1
+        self.put('tools/df', '#!/bin/sh\nn=999999\n[ ! -f /opt/events ] || n=' + str(below_kb) + '\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 999999 0 %s 0%% /\\n" "$n"\n', 0o755)
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn('space', result.stderr.lower())
-        self.assertFalse((self.base / 'events').exists())
+        self.assertIn('legacy full extraction', result.stderr)
+        self.assertIn('available ', result.stderr)
+        self.assertFalse((self.base / 'invoked').exists())
         self.clean()
 
     def test_archive_metadata_must_match_requested_release_and_architecture(self):
@@ -618,7 +631,7 @@ exec /bin/sh "$script" --root /opt/destination "$@"
         self.assertEqual(checksum.read_text().split()[0], digest)
         shutil.copy2(archive, self.base / 'bundle.tar.gz')
         (self.base / 'SHA256SUMS').write_text(checksum.read_text())
-        self.put('tools/curl', (self.root / 'tools/curl').read_text().replace('3.1.1', '2.1.1'), 0o755)
+        self.put('tools/curl', (self.root / 'tools/curl').read_text().replace('3.1.2', '2.1.1'), 0o755)
         (self.base / 'destination').mkdir()
         self.put('tools/sh', '#!/bin/sh\nscript=$1; shift\nexec /bin/sh "$script" --root /opt/destination "$@"\n', 0o755)
         result = self.run_script('--version', '2.1.1')
@@ -642,13 +655,15 @@ exec /bin/sh "$script" --root /opt/destination "$@"
         self.clean()
 
     def test_explicit_reuse_fits_small_overlay_and_installs_no_unneeded_packages(self):
+        self.bundle(version='3.1.1')
+        self.put('tools/curl', (self.root / 'tools/curl').read_text().replace('3.1.2', '3.1.1'), 0o755)
         self.put('tmp/shared', '#!/bin/sh\nexit 0\n', 0o755)
         self.put('tools/df', '''#!/bin/sh
 case "$2" in /tmp) n=999999; mount=/tmp;; *) n=39936; mount=/overlay;; esac
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 999999 0 %s 0%% %s\\n' "$n" "$mount"
 ''', 0o755)
         self.package_manager('opkg')
-        result = self.run_script('--mihomo', '/tmp/shared', '--warpscout', '/tmp/shared', '--yes')
+        result = self.run_script('--version', '3.1.1', '--mihomo', '/tmp/shared', '--warpscout', '/tmp/shared', '--yes')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('PKG', (self.base / 'events').read_text())
         self.assertEqual((self.root / 'tmp/shared').read_text(), '#!/bin/sh\nexit 0\n')
@@ -704,14 +719,16 @@ printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 9999
         self.clean()
 
     def test_peak_space_includes_profile_rollback_copy(self):
+        self.bundle(version='3.1.1')
+        self.put('tools/curl', (self.root / 'tools/curl').read_text().replace('3.1.2', '3.1.1'), 0o755)
         self.put('etc/warpd/profiles.json', 'x' * (2 * 1024 * 1024))
         self.put('tmp/shared', '#!/bin/sh\nexit 0\n', 0o755)
-        available_kb = (1048576 + 12582912 + 1048576) // 1024
+        available_kb = 2048
         self.put('tools/df', '#!/bin/sh\ncase "$2" in /tmp) n=999999; mount=/tmp;; *) n=' + str(available_kb) + '; mount=/overlay;; esac\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 999999 0 %s 0%% %s\\n" "$n" "$mount"\n', 0o755)
-        result = self.run_script('--mihomo', '/tmp/shared', '--warpscout', '/tmp/shared')
+        result = self.run_script('--version', '3.1.1', '--mihomo', '/tmp/shared', '--warpscout', '/tmp/shared')
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('space', result.stderr.lower())
-        self.assertFalse((self.base / 'events').exists(), 'insufficient rollback space reached download')
+        self.assertFalse((self.base / 'invoked').exists(), 'insufficient rollback space reached transaction')
 
     def test_check_only_reports_ready_without_download_or_install(self):
         result = self.run_script('--check-only')

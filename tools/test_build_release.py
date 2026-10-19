@@ -233,6 +233,219 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(Path(str(archive) + ".sha256").read_text(), hashlib.sha256(first).hexdigest() + "  " + archive.name + "\n")
         self.assertEqual(len(expected_files), 14)
 
+    def test_fixed_variants_have_exact_names_members_metadata_and_checksums(self):
+        import inspect
+        self.assertIn("variant", inspect.signature(br.create_archive).parameters,
+                      "create_archive needs the fixed variant selector")
+        sources, binaries = self.fixture_sources()
+        self.assertEqual(br.BUNDLE_SOURCES, sources)
+        selections = {
+            "full": ("warpd", "warpscout", "mihomo"),
+            "no-mihomo": ("warpd", "warpscout"),
+            "no-warpscout": ("warpd", "mihomo"),
+            "core": ("warpd",),
+        }
+        for arch in ("arm64", "amd64"):
+            for variant, included in selections.items():
+                with self.subTest(arch=arch, variant=variant):
+                    selected = {name: binaries[name] for name in included}
+                    archive = br.create_archive(self.root, selected, self.root / "out",
+                                                "2.1.1", arch, 1234567890, variant=variant)
+                    root = "warpd-2.1.1-linux-" + arch
+                    if variant != "full":
+                        root += "-" + variant
+                    self.assertEqual(archive.name, root + ".tar.gz")
+                    expected_files = set(sources) | {"bin/" + n for n in included}
+                    expected_files |= {"VERSION", "ARCH", "SHA256SUMS"}
+                    if variant != "full":
+                        expected_files.add("VARIANT")
+                    with tarfile.open(archive, "r:gz") as tar:
+                        members = tar.getmembers()
+                        expected_dirs = {root, root + "/bin", root + "/files", root + "/licenses"}
+                        self.assertEqual({m.name for m in members if m.isdir()}, expected_dirs)
+                        self.assertEqual([m.name for m in members],
+                                         sorted(expected_dirs | {root + "/" + n for n in expected_files}))
+                        self.assertTrue(all(m.isfile() or m.isdir() for m in members))
+                        contents = {m.name[len(root) + 1:]: tar.extractfile(m).read()
+                                    for m in members if m.isfile()}
+                        self.assertEqual(set(contents), expected_files)
+                        self.assertEqual(contents["VERSION"], b"2.1.1\n")
+                        self.assertEqual(contents["ARCH"], (arch + "\n").encode())
+                        if variant != "full":
+                            self.assertEqual(contents["VARIANT"], (variant + "\n").encode())
+                        for dest, source in sources.items():
+                            self.assertEqual(contents[dest], (self.root / source).read_bytes())
+                        for name in included:
+                            self.assertEqual(contents["bin/" + name], binaries[name].read_bytes())
+                        expected_sums = "".join(hashlib.sha256(contents[name]).hexdigest() +
+                                                "  " + name + "\n"
+                                                for name in sorted(expected_files - {"SHA256SUMS"}))
+                        self.assertEqual(contents["SHA256SUMS"], expected_sums.encode())
+                        for member in members:
+                            self.assertEqual((member.uid, member.gid, member.mtime), (0, 0, 1234567890))
+                    first = archive.read_bytes()
+                    self.assertEqual(Path(str(archive) + ".sha256").read_text(),
+                                     hashlib.sha256(first).hexdigest() + "  " + archive.name + "\n")
+                    self.assertEqual(br.create_archive(self.root, selected, self.root / "out",
+                                                      "2.1.1", arch, 1234567890,
+                                                      variant=variant).read_bytes(), first)
+                    if variant == "full":
+                        self.assertEqual(br.create_archive(self.root, binaries, self.root / "out",
+                                                          "2.1.1", arch, 1234567890).read_bytes(), first)
+                        self.assertEqual(len(members), 18)
+                        if arch == "arm64":
+                            # Captured from the unchanged pre-variant builder with these fixed inputs.
+                            self.assertEqual(hashlib.sha256(first).hexdigest(),
+                                             "d3cdaed9344f490268098b3f12d40be77b3c72894ceb94c426b65f0cd220359f")
+
+    def test_each_variant_requires_every_included_binary_and_ignores_omitted_ones(self):
+        _, binaries = self.fixture_sources()
+        selections = {
+            "full": ("warpd", "warpscout", "mihomo"),
+            "no-mihomo": ("warpd", "warpscout"),
+            "no-warpscout": ("warpd", "mihomo"),
+            "core": ("warpd",),
+        }
+        for variant, included in selections.items():
+            for name in included:
+                for missing in ("key", "file", "symlink"):
+                    with self.subTest(variant=variant, binary=name, missing=missing):
+                        selected = dict(binaries)
+                        if missing == "key":
+                            selected.pop(name)
+                        elif missing == "file":
+                            selected[name] = self.root / "absent"
+                        else:
+                            link = self.root / "symlink"
+                            link.unlink(missing_ok=True)
+                            link.symlink_to(binaries[name])
+                            selected[name] = link
+                        out = self.root / "failed-output"
+                        with self.assertRaises((KeyError, ValueError)) as error:
+                            br.create_archive(self.root, selected, out, "2.1.1", "arm64", 123,
+                                              variant=variant)
+                        self.assertIsInstance(error.exception, ValueError,
+                                              "missing binary must be a handled input error")
+                        self.assertFalse(out.exists())
+            for name in set(binaries) - set(included):
+                # An omitted input must not be inspected, even if supplied and unreadable.
+                selected = dict(binaries)
+                selected[name] = self.root / "absent"
+                br.create_archive(self.root, selected, self.root / "out", "2.1.1", "arm64", 123,
+                                  variant=variant)
+
+    def test_cli_variants_skip_omitted_fetch_and_extraction_even_on_cache_miss(self):
+        self.fixture_sources()
+        (self.root / "main.go").write_text('const version = "3.1.1"\n')
+        go = self.root / "go"
+        compile_log = self.root / "compile-log"
+        compile_log.write_text("")
+        go.write_text('#!/usr/bin/env python3\nimport os,pathlib,sys\n'
+                      'with pathlib.Path(os.environ["COMPILE_LOG"]).open("a") as log: log.write(os.environ["GOARCH"]+"\\n")\n'
+                      'pathlib.Path(sys.argv[sys.argv.index("-o")+1]).write_bytes(b"compiled fixture")\n')
+        go.chmod(0o755)
+        ws = io.BytesIO()
+        with tarfile.open(fileobj=ws, mode="w:gz") as tar:
+            info = tarfile.TarInfo("warpscout")
+            info.size = len(b"scanner")
+            tar.addfile(info, io.BytesIO(b"scanner"))
+        selections = {"full": {"warpscout", "mihomo"}, "no-mihomo": {"warpscout"},
+                      "no-warpscout": {"mihomo"}, "core": set()}
+        for arch in ("arm64", "amd64"):
+            for variant, included in selections.items():
+                with self.subTest(arch=arch, variant=variant):
+                    pins = br.dependencies(arch)
+                    payloads = {pins["warpscout"]["url"]: ws.getvalue(),
+                                pins["mihomo"]["url"]: gzip.compress(b"engine")}
+                    for pin in pins.values():
+                        pin["sha256"] = hashlib.sha256(payloads[pin["url"]]).hexdigest()
+                    requests = []
+                    def opener(request, timeout):
+                        self.assertIn(request.full_url, {pins[n]["url"] for n in included},
+                                      "omitted dependency download attempted")
+                        requests.append(request.full_url)
+                        return io.BytesIO(payloads[request.full_url])
+                    cache = self.root / (arch + "-" + variant + "-empty-cache")
+                    out = self.root / (arch + "-" + variant + "-out")
+                    self.assertFalse(cache.exists())
+                    args = ["--arch", arch, "--variant", variant, "--cache-dir", str(cache),
+                            "--output-dir", str(out)]
+                    with mock.patch.dict(os.environ, {"GO": str(go), "COMPILE_LOG": str(compile_log),
+                                                     "SOURCE_DATE_EPOCH": "1234567890"}), \
+                            mock.patch.object(br, "dependencies", return_value=pins), \
+                            mock.patch.object(br, "fetch_verified", wraps=br.fetch_verified) as fetch, \
+                            mock.patch.object(br, "extract_warpscout", wraps=br.extract_warpscout) as extract_ws, \
+                            mock.patch.object(br, "extract_mihomo", wraps=br.extract_mihomo) as extract_mh, \
+                            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout, \
+                            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                        first = None
+                        for attempt in range(2):
+                            try:
+                                status = br.main(args, repo=self.root, opener=opener)
+                            except SystemExit as error:
+                                status = error.code
+                            self.assertEqual(status, 0, stderr.getvalue())
+                            if attempt == 0:
+                                first = next(out.glob("*.tar.gz")).read_bytes()
+                            else:
+                                self.assertEqual(next(out.glob("*.tar.gz")).read_bytes(), first)
+                        self.assertEqual([call.args[0] for call in fetch.call_args_list],
+                                         [pins[n]["url"] for n in pins if n in included] * 2)
+                        self.assertEqual(extract_ws.call_count, 2 if "warpscout" in included else 0)
+                        self.assertEqual(extract_mh.call_count, 2 if "mihomo" in included else 0)
+                        root = "warpd-3.1.1-linux-" + arch + ("-" + variant if variant != "full" else "")
+                        archive = out / (root + ".tar.gz")
+                        self.assertEqual(stdout.getvalue().splitlines(),
+                                         [str(archive), str(archive) + ".sha256"] * 2)
+                        with tarfile.open(archive, "r:gz") as tar:
+                            names = {m.name for m in tar if m.isfile()}
+                        self.assertEqual({n for n in names if "/bin/" in n},
+                                         {root + "/bin/" + n for n in included | {"warpd"}})
+                    self.assertEqual(requests, [pins[n]["url"] for n in pins if n in included])
+                    self.assertEqual({p.name for p in cache.iterdir()} if cache.exists() else set(),
+                                     {pins[n]["url"].rsplit("/", 1)[-1] for n in included})
+        self.assertEqual(compile_log.read_text().splitlines(), ["arm64"] * 8 + ["amd64"] * 8)
+
+    def test_invalid_variant_and_arch_are_rejected_before_tools_or_source_reads(self):
+        from contextlib import ExitStack
+        bad_variants = ("", "FULL", "full\n", "../core", "core/extra", "no-both", None, 1, [])
+        with ExitStack() as stack:
+            guards = [stack.enter_context(mock.patch.object(br, name,
+                       side_effect=AssertionError("unexpected external call: " + name)))
+                      for name in ("fetch_verified", "extract_warpscout", "extract_mihomo",
+                                   "compile_warpd", "read_version", "release_epoch")]
+            guards += [stack.enter_context(mock.patch.object(br.subprocess, name,
+                        side_effect=AssertionError("unexpected subprocess: " + name)))
+                       for name in ("run", "check_output")]
+            read = stack.enter_context(mock.patch.object(Path, "read_bytes",
+                                       side_effect=AssertionError("unexpected source read")))
+            for variant in bad_variants:
+                with self.subTest(variant=variant):
+                    with self.assertRaises((ValueError, KeyError, TypeError)) as error:
+                        br.create_archive(self.root, {}, self.root / "out", "3.1.1", "arm64", 123,
+                                          variant=variant)
+                    self.assertIsInstance(error.exception, ValueError)
+                    self.assertIn("variant", str(error.exception))
+            for variant in ("full", "no-mihomo", "no-warpscout", "core"):
+                with self.subTest(arch="mips", variant=variant):
+                    with self.assertRaisesRegex(ValueError, "architectures"):
+                        br.create_archive(self.root, {}, self.root / "out", "3.1.1", "mips", 123,
+                                          variant=variant)
+            for args in (["--variant", v] for v in bad_variants if isinstance(v, str)):
+                with self.subTest(args=args), mock.patch("sys.stderr", new_callable=io.StringIO):
+                    with self.assertRaises(SystemExit) as error:
+                        br.main(args, repo=self.root)
+                    self.assertEqual(error.exception.code, 2)
+            for variant in ("full", "no-mihomo", "no-warpscout", "core"):
+                with self.subTest(cli_arch="mips", variant=variant), \
+                        mock.patch("sys.stderr", new_callable=io.StringIO):
+                    with self.assertRaises(SystemExit) as error:
+                        br.main(["--arch", "mips", "--variant", variant], repo=self.root)
+                    self.assertEqual(error.exception.code, 2)
+            for guard in guards + [read]:
+                guard.assert_not_called()
+        self.assertFalse((self.root / "out").exists())
+
     def test_main_builds_complete_release_offline_with_cache_and_output_options(self):
         self.assertTrue(hasattr(br, "main"), "release command missing")
         self.fixture_sources()
@@ -273,7 +486,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(os.access(script, os.X_OK))
         result = subprocess.run([str(script), "--help"], cwd=self.root, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        for option in ("--arch", "--cache-dir", "--output-dir", "GO=", "SOURCE_DATE_EPOCH"):
+        for option in ("--arch", "--variant", "--cache-dir", "--output-dir", "GO=", "SOURCE_DATE_EPOCH"):
             self.assertIn(option, result.stdout)
         bad = subprocess.run([str(script), "--arch", "mips"], cwd=self.root, capture_output=True, text=True, timeout=10)
         self.assertEqual(bad.returncode, 2)
@@ -303,6 +516,26 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "regular file"):
             br.create_archive(self.root, binaries, self.root / "out", "2.1.1", "arm64", 123)
         self.assertFalse((self.root / "out" / "warpd-2.1.1-linux-arm64.tar.gz").exists())
+
+    def test_variants_preserve_release_input_bounds_and_source_symlink_checks(self):
+        _, binaries = self.fixture_sources()
+        for variant in ("full", "no-mihomo", "no-warpscout", "core"):
+            for version, epoch in (("../3.1.1", 123), ("3.1.1\n", 123),
+                                   ("3.1.1", -1), ("3.1.1", 4294967296), ("3.1.1", "123")):
+                with self.subTest(variant=variant, version=version, epoch=epoch):
+                    with self.assertRaises(ValueError):
+                        br.create_archive(self.root, binaries, self.root / "out", version,
+                                          "arm64", epoch, variant=variant)
+                    self.assertFalse((self.root / "out").exists())
+        source = self.root / "packaging/licenses/mihomo-GPL-3.0.txt"
+        source.unlink()
+        source.symlink_to(self.root / "local.key")
+        for variant in ("full", "no-mihomo", "no-warpscout", "core"):
+            with self.subTest(variant=variant):
+                with self.assertRaisesRegex(ValueError, "regular file"):
+                    br.create_archive(self.root, binaries, self.root / "out", "3.1.1",
+                                      "arm64", 123, variant=variant)
+                self.assertFalse((self.root / "out").exists())
 
     def test_download_cannot_complete_after_its_deadline(self):
         now = [0]

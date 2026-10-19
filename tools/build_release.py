@@ -28,24 +28,40 @@ BUNDLE_SOURCES = {
 }
 
 
-def create_archive(repo, binaries, output_dir, version, arch, epoch):
+VARIANT_BINARIES = {
+    "full": ("warpd", "warpscout", "mihomo"),
+    "no-mihomo": ("warpd", "warpscout"),
+    "no-warpscout": ("warpd", "mihomo"),
+    "core": ("warpd",),
+}
+
+
+def create_archive(repo, binaries, output_dir, version, arch, epoch, variant="full"):
     dependencies(arch)
+    if not isinstance(variant, str) or variant not in VARIANT_BINARIES:
+        raise ValueError("supported variants: " + ", ".join(VARIANT_BINARIES))
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("invalid release version")
     if not isinstance(epoch, int) or not 0 <= epoch <= 0xFFFFFFFF:
         raise ValueError("release timestamp out of bounds")
     paths = {name: Path(repo) / source for name, source in BUNDLE_SOURCES.items()}
-    paths.update({"bin/" + name: Path(binaries[name])
-                  for name in ("warpd", "warpscout", "mihomo")})
+    for name in VARIANT_BINARIES[variant]:
+        if name not in binaries:
+            raise ValueError("required release binary missing: " + name)
+        paths["bin/" + name] = Path(binaries[name])
     for path in paths.values():
         if path.is_symlink() or not path.is_file():
             raise ValueError("release source must be a regular file, not a symlink: " + str(path))
     files = {name: path.read_bytes() for name, path in paths.items()}
     files.update(VERSION=(version + "\n").encode(), ARCH=(arch + "\n").encode())
+    if variant != "full":
+        files["VARIANT"] = (variant + "\n").encode()
     files["SHA256SUMS"] = "".join(
         hashlib.sha256(files[name]).hexdigest() + "  " + name + "\n"
         for name in sorted(files)).encode()
     root = f"warpd-{version}-linux-{arch}"
+    if variant != "full":
+        root += "-" + variant
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     archive = output_dir / (root + ".tar.gz")
@@ -252,6 +268,8 @@ def main(argv=None, *, repo=None, opener=None):
                "SOURCE_DATE_EPOCH overrides the current commit timestamp (0..4294967295). "
                "Dependencies are downloaded over HTTPS and checked against pinned SHA-256 hashes.")
     parser.add_argument("--arch", choices=("arm64", "amd64"), default="arm64", help="Linux target (default: arm64)")
+    parser.add_argument("--variant", choices=tuple(VARIANT_BINARIES), default="full",
+                        help="bundled binaries (default: full; core includes only warpd)")
     parser.add_argument("--cache-dir", type=Path, default=repo / "dist/cache", help="verified download cache (default: dist/cache)")
     parser.add_argument("--output-dir", type=Path, default=repo / "dist", help="archive output directory (default: dist)")
     args = parser.parse_args(argv)
@@ -263,13 +281,16 @@ def main(argv=None, *, repo=None, opener=None):
                 raise FileNotFoundError("required release source missing: " + source)
         pins = dependencies(args.arch)
         cached = {name: fetch_verified(pin["url"], pin["sha256"], args.cache_dir, opener=opener)
-                  for name, pin in pins.items()}
+                  for name, pin in pins.items() if name in VARIANT_BINARIES[args.variant]}
         with tempfile.TemporaryDirectory(prefix="warpd-release-") as staging:
-            binaries = {name: Path(staging) / name for name in ("warpd", "warpscout", "mihomo")}
-            extract_warpscout(cached["warpscout"], binaries["warpscout"])
-            extract_mihomo(cached["mihomo"], binaries["mihomo"])
+            binaries = {name: Path(staging) / name for name in VARIANT_BINARIES[args.variant]}
+            if "warpscout" in cached:
+                extract_warpscout(cached["warpscout"], binaries["warpscout"])
+            if "mihomo" in cached:
+                extract_mihomo(cached["mihomo"], binaries["mihomo"])
             compile_warpd(repo, args.arch, binaries["warpd"])
-            archive = create_archive(repo, binaries, args.output_dir, version, args.arch, epoch)
+            archive = create_archive(repo, binaries, args.output_dir, version, args.arch, epoch,
+                                     variant=args.variant)
         print(archive)
         print(str(archive) + ".sha256")
         return 0

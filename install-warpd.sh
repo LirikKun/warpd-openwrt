@@ -2,9 +2,12 @@
 # Online OpenWrt bootstrap. Downloads only public, versioned warpd release assets.
 set -eu
 fail() { printf 'warpd bootstrap: %s\n' "$*" >&2; exit 1; }
+# Call only with a sanitized expected value. Hash stdin on both sides, avoiding
+# command-substitution NUL/newline loss and filename-dependent digest output.
+canonical_line() { [ "$(sha256sum < "$1")" = "$(printf '%s\n' "$2" | sha256sum)" ]; }
 CHECK=0
 YES=0
-VERSION=3.1.1
+VERSION=3.1.2
 VERSION_SET=0
 LANGUAGE=
 MIHOMO=
@@ -77,12 +80,12 @@ for external in "$MIHOMO" "$WARPSCOUT"; do
         [ ! "$external" -ef "$private" ] || fail "Dependency aliases private data: $external"
     done
 done
-# Conservative release estimates (current bundles: 27-30 MiB compressed,
-# 65-71 MiB expanded); exact member sizes replace these after verification.
+PHASE='download preflight'
 space() {
     available=$(df -Pk "$1" | awk 'NR > 1 {n=$4} END {print n}')
     case "$available" in ''|*[!0-9]*) fail "Cannot determine free space: $1" ;; esac
-    [ "$((available * 1024))" -ge "$2" ] || fail "Insufficient space at $1: need $2 bytes (including staging/rollback). Use explicit --mihomo/--warpscout reuse on small overlays."
+    available=$((available * 1024))
+    [ "$available" -ge "$2" ] || fail "Insufficient space during $PHASE at $1: need $2 bytes additional, available $available bytes"
 }
 peak_space() {
     # Add transaction bytes to RAM staging when /tmp shares its backing mount.
@@ -102,10 +105,24 @@ peak_space() {
     space /usr "$((OLD + NEW))"
     space /etc "$((OLD + NEW))"
 }
+# Resolve the longest matching mount, not its device name (tmpfs devices may
+# have arbitrary labels). All transaction bytes are conservatively charged once
+# if any destination is RAM-backed; this also covers split /usr and /etc.
+transaction_ram() {
+    RAM_GROWTH=0
+    for directory in /usr/bin /usr/libexec/warpd /etc/init.d /usr/sbin /usr/share/warpd /etc/config /etc/warpd; do
+        fstype=$(awk -v path="$directory" '
+            {m=$2; if ((m=="/" || path==m || index(path,m "/")==1) && length(m)>longest) {longest=length(m); type=$3}}
+            END {if (!longest) exit 1; print type}
+        ' /proc/mounts) || fail 'Cannot identify destination RAM backing'
+        case "$fstype" in tmpfs|ramfs) RAM_GROWTH=$((OLD + NEW)); break ;; esac
+    done
+}
 ram() {
     available=$(awk '/^MemAvailable:/ {a=$2} /^MemFree:/ {f=$2} /^Buffers:/ {b=$2} /^Cached:/ {c=$2} END {if (a) print a; else print f+b+c}' /proc/meminfo)
     case "$available" in ''|*[!0-9]*) fail 'Cannot determine available RAM' ;; esac
-    [ "$((available * 1024))" -ge "$1" ] || fail 'Insufficient RAM for private /tmp download/extraction'
+    available=$((available * 1024))
+    [ "$available" -ge "$1" ] || fail "Insufficient RAM during $PHASE: need $1 bytes additional, available $available bytes (tmpfs storage plus decompressor reserve; not an RSS cap)"
 }
 OLD=1048576
 for target in /usr/bin/warpd /usr/libexec/warpd/mihomo /usr/libexec/warpd/warpscout /etc/init.d/warpd /usr/sbin/warpd-uninstall /etc/config/warpd /etc/warpd/profiles.json; do
@@ -118,8 +135,24 @@ done
 NEW=12582912
 [ -n "$MIHOMO" ] || NEW=$((NEW + 67108864))
 [ -n "$WARPSCOUT" ] || NEW=$((NEW + 6291456))
-peak_space 130023424
-ram 130023424
+# Select only version-supported, explicitly requested omissions before budgeting.
+VARIANT=full
+if awk -v v="$VERSION" 'BEGIN {split(v,a,"."); exit !(a[1]>3 || (a[1]==3 && (a[2]>1 || (a[2]==1 && a[3]>=2))))}'; then
+    if [ -n "$MIHOMO" ] && [ -n "$WARPSCOUT" ]; then VARIANT=core
+    elif [ -n "$MIHOMO" ]; then VARIANT=no-mihomo
+    elif [ -n "$WARPSCOUT" ]; then VARIANT=no-warpscout
+    fi
+fi
+case "$VARIANT" in
+    full) COMPRESSED_CAP=41943040 ;;
+    no-mihomo) COMPRESSED_CAP=12582912 ;;
+    no-warpscout) COMPRESSED_CAP=37748736 ;;
+    core) COMPRESSED_CAP=8388608 ;;
+esac
+# The same cap governs initial space, RAM and the bounded fetch. Historical
+# releases retain the full ceiling even when their dependencies are reused.
+space /tmp "$((COMPRESSED_CAP + 1048576))"
+ram "$((COMPRESSED_CAP + 9437184))"
 # With wget | ash, stdin contains shell code, not prompt answers. Keep it intact
 # and read the controlling terminal through a separate descriptor instead.
 INTERACTIVE=0
@@ -170,7 +203,13 @@ if [ -z "$LANGUAGE" ] && [ "$INTERACTIVE" = 1 ]; then
         *) fail 'Invalid language selection; use --language en|ru' ;;
     esac
 fi
+# An explicit language edit coexists with the staged config and rollback copy.
+if [ -n "$LANGUAGE" ] && [ -f /etc/config/warpd ] && [ ! -L /etc/config/warpd ]; then
+    bytes=$(wc -c < /etc/config/warpd)
+    OLD=$((OLD + bytes + 4096))
+fi
 NAME="warpd-$VERSION-linux-$ARCH"
+[ "$VARIANT" = full ] || NAME="$NAME-$VARIANT"
 URL="https://github.com/LirikKun/warpd-openwrt/releases/download/v$VERSION"
 umask 077
 WORK=$(mktemp -d /tmp/warpd-bootstrap.XXXXXX) || fail 'Cannot create private temporary directory'
@@ -198,8 +237,8 @@ trap cleanup 0
 trap 'exit 1' HUP INT TERM
 fetch() {
     attempts=0
-    # POSIX ulimit -f counts 512-byte blocks: 64 KiB manifest / 40 MiB bundle.
-    case "$1" in *.sha256) limit=128 ;; *) limit=81920 ;; esac
+    # POSIX ulimit -f counts 512-byte blocks: sidecar remains 64 KiB.
+    case "$1" in *.sha256) limit=128 ;; *) limit=$((COMPRESSED_CAP / 512)) ;; esac
     while [ "$attempts" -lt 3 ]; do
         # wget/uclient -T is only an inactivity timeout, not a total deadline.
         if (ulimit -f "$limit" || exit 1; exec curl -fL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 180 -o "$2" "$1"); then return 0; fi
@@ -223,23 +262,50 @@ printf '%s  %s\n' "$EXPECTED_HASH" "$NAME.tar.gz" > "$WORK/selected.sha256"
 (cd "$WORK" && sha256sum -c selected.sha256) || fail 'Checksum verification failed'
 # The release builder emits plain USTAR with four directories and 14 files.
 # Inspect the verified archive before extraction; only simple regular files/dirs.
-LC_ALL=C tar -tvzf "$WORK/$NAME.tar.gz" > "$WORK/archive.list" || fail 'Cannot list archive'
-awk -v root="$NAME" '
+(ulimit -f 128 || exit 1; LC_ALL=C tar -tvzf "$WORK/$NAME.tar.gz") > "$WORK/archive.list" || fail 'Cannot list archive'
+awk -v root="$NAME" -v variant="$VARIANT" '
     BEGIN {
         split("install.sh uninstall.sh VERSION ARCH SHA256SUMS bin/warpd bin/warpscout bin/mihomo files/warpd.init files/warpd.config README.md THIRD_PARTY.md licenses/warpscout-MIT.txt licenses/mihomo-GPL-3.0.txt", files, " ")
+        expected=18
         for (i in files) allowed[root "/" files[i]] = "-"
+        if (variant!="full") {allowed[root "/VARIANT"]="-"; expected++}
+        if (variant=="core" || variant=="no-mihomo") {delete allowed[root "/bin/mihomo"]; expected--}
+        if (variant=="core" || variant=="no-warpscout") {delete allowed[root "/bin/warpscout"]; expected--}
         allowed[root "/"] = "d"; allowed[root "/bin/"] = "d"
         allowed[root "/files/"] = "d"; allowed[root "/licenses/"] = "d"
     }
     {
         path = $6; type = substr($1, 1, 1)
         if (NF != 6 || !(path in allowed) || allowed[path] != type || seen[path]++ || $3 !~ /^[0-9]+$/) bad = 1
+        limit=1048576
+        if (path ~ /\/bin\//) limit=83886080
+        if (path==root "/install.sh" || path==root "/uninstall.sh") limit=131072
+        if (path ~ /\/files\//) limit=65536
+        if (path==root "/SHA256SUMS") limit=16384
+        if (path==root "/ARCH" || path==root "/VERSION" || path==root "/VARIANT") limit=128
+        if ($3>limit || (type=="d" && $3!=0)) bad=1
         total += $3
     }
-    END { if (bad || NR != 18) exit 1; printf "%.0f\n", total }
+    END { if (bad || NR != expected || total>100663296) exit 1; printf "%.0f\n", total }
 ' "$WORK/archive.list" > "$WORK/expanded.size" || fail 'Unsafe or unexpected archive members'
 EXPANDED=$(cat "$WORK/expanded.size")
-ram "$((EXPANDED + 1048576))"
+# The compressed bytes already occupy free space: budget only further growth.
+PHASE='verified control extraction'
+space /tmp 1048576
+ram 9437184
+mkdir "$WORK/$NAME"
+CONTROLS='install.sh ARCH VERSION SHA256SUMS'
+[ "$VARIANT" = full ] || CONTROLS="$CONTROLS VARIANT"
+for member in $CONTROLS; do
+    (ulimit -f 256 || exit 1; exec tar -xOzf "$WORK/$NAME.tar.gz" "$NAME/$member") > "$WORK/$NAME/$member" || fail 'Control extraction failed'
+    expected_size=$(awk -v p="$NAME/$member" '$6==p {print $3}' "$WORK/archive.list")
+    [ "$(wc -c < "$WORK/$NAME/$member")" = "$expected_size" ] || fail 'Control size mismatch'
+done
+if [ "$VARIANT" != full ]; then
+    canonical_line "$WORK/$NAME/VARIANT" "$VARIANT" || fail 'Archive VARIANT metadata does not match requested asset'
+fi
+ARCHIVE_MODE=0
+if grep -qx '# warpd-archive-install-v1' "$WORK/$NAME/install.sh"; then ARCHIVE_MODE=1; fi
 NEW=$(awk -v mh="$MIHOMO" -v ws="$WARPSCOUT" -v root="$NAME" '
     $1 ~ /^-/ {
         if ($6 == root "/bin/mihomo" && mh != "") next
@@ -247,14 +313,26 @@ NEW=$(awk -v mh="$MIHOMO" -v ws="$WARPSCOUT" -v root="$NAME" '
         n += $3 + 4096
     } END {printf "%.0f\n", n + 262144}
 ' "$WORK/archive.list")
-peak_space "$((EXPANDED + 1048576))"
-tar -xzf "$WORK/$NAME.tar.gz" -C "$WORK" || fail 'Archive extraction failed'
-rm -f "$WORK/$NAME.tar.gz"
-[ "$(cat "$WORK/$NAME/ARCH")" = "$ARCH" ] || fail 'Archive ARCH does not match platform'
-[ "$(cat "$WORK/$NAME/VERSION")" = "$VERSION" ] || fail 'Archive VERSION does not match requested release'
+transaction_ram
+if [ "$ARCHIVE_MODE" = 1 ]; then
+    PHASE='archive-backed transaction'
+    peak_space 1048576
+    ram "$((RAM_GROWTH + 9437184))"
+else
+    PHASE='legacy full extraction and transaction'
+    # Old installers need the complete expanded bundle. Compressed and expanded
+    # bytes coexist during extraction; df already excludes the downloaded bytes.
+    peak_space "$((EXPANDED + 1048576))"
+    ram "$((EXPANDED + RAM_GROWTH + 9437184))"
+    tar -xzf "$WORK/$NAME.tar.gz" -C "$WORK" || fail 'Archive extraction failed'
+    rm -f "$WORK/$NAME.tar.gz"
+fi
+canonical_line "$WORK/$NAME/ARCH" "$ARCH" || fail 'Malformed ARCH metadata or platform mismatch'
+canonical_line "$WORK/$NAME/VERSION" "$VERSION" || fail 'Malformed VERSION metadata or requested release mismatch'
 set --
+[ "$ARCHIVE_MODE" = 0 ] || set -- --archive "$WORK/$NAME.tar.gz"
 [ -z "$LANGUAGE" ] || set -- "$@" --language "$LANGUAGE"
 [ -z "$MIHOMO" ] || set -- "$@" --mihomo "$MIHOMO"
 [ -z "$WARPSCOUT" ] || set -- "$@" --warpscout "$WARPSCOUT"
-sh "$WORK/$NAME/install.sh" "$@" || fail 'Bundle installation failed'
+TMPDIR="$WORK" sh "$WORK/$NAME/install.sh" "$@" || fail 'Bundle installation failed'
 SUCCESS=1

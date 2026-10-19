@@ -18,7 +18,7 @@ warpd does not change routes, firewall, router DNS or SSClash settings, and does
 
 ## Install and upgrade
 
-Requires **OpenWrt arm64 or amd64**, root SSH access, working HTTPS and enough free storage/RAM to unpack the bundle. Connect to your router as root (replace the example address):
+Requires **OpenWrt arm64 or amd64**, root SSH access and working HTTPS. The full bundle initially requires **41 MiB free in `/tmp`** and a separate **49 MiB available-memory preflight**. Persistent storage must also fit the installed payload and rollback copies; these checks are not a total-RAM guarantee. Connect to your router as root (replace the example address):
 
 ```sh
 ssh root@192.168.10.1
@@ -32,6 +32,15 @@ wget -T 30 -qO- https://github.com/LirikKun/warpd-openwrt/raw/refs/heads/main/in
 
 The installer detects the architecture, checks requirements and verifies the downloaded bundle's SHA-256. It asks before installing missing dependencies through your configured `apk`/`opkg` repositories and offers **English / Русский** for the UI.
 
+Payloads stream from the verified compressed archive into destination-side staging instead of being fully unpacked in `/tmp`. To **explicitly reuse existing compatible executables**, replace the following absolute paths with your own (omit either flag to install that bundled dependency):
+
+```sh
+wget -T 30 -qO- https://github.com/LirikKun/warpd-openwrt/raw/refs/heads/main/install-warpd.sh | ash -s -- \
+  --mihomo /absolute/path/to/mihomo --warpscout /absolute/path/to/warpscout
+```
+
+Reuse is opt-in: shared executables are not probed, changed or restarted. The installer selects `no-mihomo`, `no-warpscout` or `core` according to the supplied flags; `core` needs both. All four bundles are provided for both architectures; dependencies are not downloaded separately on demand. [Storage and memory details](docs/packaging-integration.md#archive-backed-installation-new-bundle-format-support).
+
 Upgrades preserve configuration, accounts, profiles and the current UI language unless you change it. Proxy connections are briefly interrupted. **A routine upgrade does not need a new account.**
 
 Before upgrading, keep a private backup off the router of these files, if present:
@@ -40,7 +49,7 @@ Before upgrading, keep a private backup off the router of these files, if presen
 - `/etc/warpd/warp-account.json` — shared WARP account.
 - `/etc/warpd/profiles.json` — profiles and Relay credentials.
 
-Older profile settings migrate on first start. Downgrading the binary alone does not undo that migration. [Release downloads and notes](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.1).
+Older profile settings migrate on first start. Downgrading the binary alone does not undo that migration. [Release downloads and notes](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.2).
 
 ## First start
 
@@ -110,6 +119,6 @@ Thanks to [llimonix](https://github.com/nellimonix) for the external Relay servi
 
 Start with **Settings → Diagnostics and log** in the panel. Over SSH, use `logread -e warpd` or `/etc/init.d/warpd status`. Check the account, selected ports, router time and Internet access before changing other services.
 
-- [v3.1.1 release notes](docs/releases/v3.1.1.md)
+- [v3.1.2 release notes](docs/releases/v3.1.2.md)
 - [Profile API reference](docs/profile-api-contract.md) · [Relay reference](docs/relay-runtime-integration.md)
 - [Third-party components and licenses](THIRD_PARTY.md). No license has been chosen for warpd's own code.
