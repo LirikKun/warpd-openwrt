@@ -7,7 +7,9 @@ A WARP proxy manager for OpenWrt with a built-in web UI. Create SOCKS profiles, 
 ## Features
 
 - Multiple WARP / AmneziaWG (AWG), MASQUE QUIC/H2 and Relay-WARP profiles.
-- Separate names, ports, endpoint settings and enable switches for each profile.
+- Compact TUI-style web console: Proxies, Relay, Search and Settings; drafts survive navigation.
+- Explicit Rename, separate ports, endpoint settings and enable switches for each profile.
+- Per-profile geography modes: off, exclusions or a strict selected public-IP country.
 - Automatic endpoint discovery, manual endpoint pins and availability checks.
 - Relay activation/IP monitoring, with optional linked tunnel profiles.
 - English and Russian UI; no external web services needed to load the panel.
@@ -38,17 +40,21 @@ Before upgrading, keep a private backup off the router of these files, if presen
 - `/etc/warpd/warp-account.json` — shared WARP account.
 - `/etc/warpd/profiles.json` — profiles and Relay credentials.
 
-Older profile settings migrate on first start. Downgrading the binary alone does not undo that migration. [Release downloads and notes](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.0.0).
+Older profile settings migrate on first start. Downgrading the binary alone does not undo that migration. [Release downloads and notes](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.0).
 
 ## First start
 
 1. Open `http://<router-LAN-IP>:9095/` in your browser.
 2. A fresh installation has **one WARP profile on port 4001**, but no account yet.
-3. Open **Diagnostics and log → Account maintenance · destructive actions → New account**. Confirm and wait for successful registration in the log.
-4. If endpoint discovery has not started, click **Find for all**. Wait until the profile is ready before connecting clients.
+3. Open **Settings → Diagnostics and log → Account maintenance · destructive actions → New account**. Confirm and wait for successful registration in the log.
+4. If endpoint discovery has not started, open **Search → Find for all**. Wait until the profile is ready before connecting clients.
 5. Use **Add proxy** for more profiles; each has its own port. Existing installations retain their profiles and ports.
 
 Registration and discovery require external connectivity. If a profile is not ready, its SOCKS port stays closed; check the status and log in the panel.
+
+### Geography policy
+
+Under each profile's **Advanced** settings, **off** bypasses geography only; **exclusions** rejects excluded observed nodes, node countries and public-IP countries; **strict** also requires the selected public-IP country, verified by fresh independent geolocation and an agreeing current `/meta` result. Unknown required or conflicting evidence blocks access. Transport and credential checks still apply in every mode. Checks are periodic, not instant country-change detection. Existing profiles without an explicit mode keep their compatibility behavior until changed. The Relay server country is not the public-IP target.
 
 ## Connect a client
 
@@ -65,7 +71,7 @@ SOCKS supports **TCP CONNECT only, not UDP or BIND**. MASQUE QUIC support does n
 
 ## Relay setup
 
-1. Under **Relay → Add Relay**, save a **disabled** resource with your private activation URL and intended source IP/interface. Check the intended outgoing public IP and acknowledge that activation and tunnel traffic use the same path. Do not publish the URL or open it from another machine.
+1. Under **Relay → Add Relay**, save a **disabled** resource with your private activation URL. Before enabling, open **Advanced**, configure the intended source IP/interface, check the outgoing public IP and acknowledge that activation and tunnel traffic use the same path. Saving only the link does not configure that path automatically. Do not publish the URL or open it from another machine.
 2. Add a **disabled Relay-WARP** profile linked to that resource; choose its server country and SOCKS port. The server country does not guarantee the exit country.
 3. In the profile's **Tunnel account · this profile only** section, enter its assigned credentials manually or explicitly confirm **Register a new account**. These credentials are separate from the shared WARP account.
 4. Enable the **parent Relay resource first, then the child profile**. Enabling the parent can send activation requests to the provider. Wait until the child is ready; saving settings alone does not mean the tunnel works.
@@ -102,8 +108,8 @@ Relay: [llimonix](https://github.com/nellimonix) · [warp-config-generator-verce
 
 ## Help and references
 
-Start with **Diagnostics and log** in the panel. Over SSH, use `logread -e warpd` or `/etc/init.d/warpd status`. Check the account, selected ports, router time and Internet access before changing other services.
+Start with **Settings → Diagnostics and log** in the panel. Over SSH, use `logread -e warpd` or `/etc/init.d/warpd status`. Check the account, selected ports, router time and Internet access before changing other services.
 
-- [v3.0.0 release notes](docs/releases/v3.0.0.md)
+- [v3.1.0 release notes](docs/releases/v3.1.0.md)
 - [Profile API reference](docs/profile-api-contract.md) · [Relay reference](docs/relay-runtime-integration.md)
 - [Third-party components and licenses](THIRD_PARTY.md). No license has been chosen for warpd's own code.

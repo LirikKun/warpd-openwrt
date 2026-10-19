@@ -4,7 +4,7 @@ set -eu
 fail() { printf 'warpd bootstrap: %s\n' "$*" >&2; exit 1; }
 CHECK=0
 YES=0
-VERSION=3.0.0
+VERSION=3.1.0
 VERSION_SET=0
 LANGUAGE=
 MIHOMO=
