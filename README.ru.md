@@ -40,7 +40,7 @@ wget -T 30 -qO- https://github.com/LirikKun/warpd-openwrt/raw/refs/heads/main/in
 - `/etc/warpd/warp-account.json` — общий аккаунт WARP.
 - `/etc/warpd/profiles.json` — профили и учётные данные Relay.
 
-Старые настройки профилей переносятся при первом запуске. Откат одного бинарника не отменяет перенос. [Файлы и описание релиза](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.0).
+Старые настройки профилей переносятся при первом запуске. Откат одного бинарника не отменяет перенос. [Файлы и описание релиза](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.1).
 
 ## Первый запуск
 
@@ -110,6 +110,6 @@ warpd-uninstall --purge
 
 Начните с **«Настройки» → «Диагностика и журнал»** в панели. По SSH доступны `logread -e warpd` и `/etc/init.d/warpd status`. Прежде чем менять другие службы, проверьте аккаунт, выбранные порты, время роутера и доступ в Интернет.
 
-- [Что нового в v3.1.0](docs/releases/v3.1.0.md)
+- [Что нового в v3.1.1](docs/releases/v3.1.1.md)
 - [Справка API профилей](docs/profile-api-contract.md) · [Справка Relay](docs/relay-runtime-integration.md) (англ.)
 - [Сторонние компоненты и лицензии](THIRD_PARTY.md). Для собственного кода warpd лицензия пока не выбрана.

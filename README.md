@@ -40,7 +40,7 @@ Before upgrading, keep a private backup off the router of these files, if presen
 - `/etc/warpd/warp-account.json` — shared WARP account.
 - `/etc/warpd/profiles.json` — profiles and Relay credentials.
 
-Older profile settings migrate on first start. Downgrading the binary alone does not undo that migration. [Release downloads and notes](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.0).
+Older profile settings migrate on first start. Downgrading the binary alone does not undo that migration. [Release downloads and notes](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.1).
 
 ## First start
 
@@ -110,6 +110,6 @@ Thanks to [llimonix](https://github.com/nellimonix) for the external Relay servi
 
 Start with **Settings → Diagnostics and log** in the panel. Over SSH, use `logread -e warpd` or `/etc/init.d/warpd status`. Check the account, selected ports, router time and Internet access before changing other services.
 
-- [v3.1.0 release notes](docs/releases/v3.1.0.md)
+- [v3.1.1 release notes](docs/releases/v3.1.1.md)
 - [Profile API reference](docs/profile-api-contract.md) · [Relay reference](docs/relay-runtime-integration.md)
 - [Third-party components and licenses](THIRD_PARTY.md). No license has been chosen for warpd's own code.

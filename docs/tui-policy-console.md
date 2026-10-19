@@ -1,6 +1,6 @@
-# TUI console and per-profile policy (v3.1.0)
+# TUI console and per-profile policy (v3.1.1)
 
-This guide describes the v3.1.0 console and per-profile policy; the installer targets v3.1.0. See the [release page](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.0) for published availability, the [release notes](releases/v3.1.0.md) and the [current guide](../README.md) for setup. Source review and package verification do not establish that a router has been upgraded or that a live provider tunnel has been tested.
+This guide describes the v3.1.1 console and per-profile policy; the installer targets v3.1.1. See the [release page](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.1.1) for published availability, the [release notes](releases/v3.1.1.md) and the [current guide](../README.md) for setup. Source review and package verification do not establish that a router has been upgraded or that a live provider tunnel has been tested.
 
 ## Console
 
