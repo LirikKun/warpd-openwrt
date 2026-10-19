@@ -32,6 +32,8 @@ type publicProfile struct {
 	RelayCountry              string      `json:"relay_country"`
 	ExcludeNodes              string      `json:"exclude_nodes"`
 	ExcludeCountries          string      `json:"exclude_countries"`
+	PolicyMode                string      `json:"policy_mode"`
+	PolicyCountry             string      `json:"policy_country"`
 	EffectiveExcludeNodes     string      `json:"effective_exclude_nodes"`
 	EffectiveExcludeCountries string      `json:"effective_exclude_countries"`
 	AWG                       *AWGOptions `json:"awg,omitempty"`
@@ -64,6 +66,8 @@ func publicProfiles(g Settings) []publicProfile {
 		if item.Name == "" {
 			item.Name = id
 		}
+		// Legacy remains empty: it is not a selectable mode.
+		item.PolicyMode, item.PolicyCountry = p.PolicyMode, p.PolicyCountry
 		if kind == "relay-warp" {
 			mode := p.Credential.Mode
 			configured := relayCredentialConfigured(p)
@@ -125,6 +129,8 @@ type profilePatch struct {
 	RelayCountry     *string     `json:"relay_country"`
 	ExcludeNodes     *string     `json:"exclude_nodes"`
 	ExcludeCountries *string     `json:"exclude_countries"`
+	PolicyMode       *string     `json:"policy_mode"`
+	PolicyCountry    *string     `json:"policy_country"`
 	AWG              *AWGOptions `json:"awg"`
 }
 type relayPatch struct {
@@ -348,6 +354,15 @@ func applyProfileFields(p *ProxySettings, b profilePatch) error {
 	if b.AWG != nil {
 		p.AWG = *b.AWG
 	}
+	if b.PolicyMode != nil {
+		if *b.PolicyMode != "off" && *b.PolicyMode != "exclusions" && *b.PolicyMode != "strict" {
+			return fmt.Errorf("policy_mode must be off, exclusions or strict")
+		}
+		p.PolicyMode = *b.PolicyMode
+	}
+	if b.PolicyCountry != nil {
+		p.PolicyCountry = *b.PolicyCountry
+	}
 	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 128 || strings.ContainsAny(p.Name, "\r\n\x00") {
 		return fmt.Errorf("name must contain 1 to 128 characters without control characters")
 	}
@@ -425,6 +440,9 @@ func (srv *Server) registerProfileAPI(mux *http.ServeMux) {
 				return fmt.Errorf("type must be warp, masque or relay-warp")
 			}
 			p := NewProxyProfile(id, *b.Type)
+			// Constructors and migration preserve legacy defaults. Only an explicit
+			// API create introduces the new exclusions policy by default.
+			p.PolicyMode = "exclusions"
 			p.Port = nextProfilePort(*g)
 			if err := applyProfileFields(p, b); err != nil {
 				return err

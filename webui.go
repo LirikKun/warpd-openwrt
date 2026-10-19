@@ -35,6 +35,21 @@ func makeEnglishWebUI(pairs ...string) *strings.Replacer {
 }
 
 var englishWebUI = makeEnglishWebUI(
+	"Политика: отключена", "Policy: off",
+	"Мониторинг включён · туннель — в профиле прокси", "Monitoring enabled · tunnel status in proxy profile",
+	"Разделы", "Sections",
+	"Поиск", "Search",
+	"Расширенные настройки", "Advanced settings",
+	"Настроить путь", "Configure path",
+	"Переименовать", "Rename",
+	"Политика выхода", "Exit policy",
+	"Текущая политика (совместимость)", "Existing policy (compatibility)",
+	"Без геопроверки", "No geography checks",
+	"Исключения HTTP-colo", "HTTP colo exclusions",
+	"Строго: страна публичного IP", "Strict: public IP country",
+	"Страна публичного IP · код из двух букв", "Public IP country · two-letter code",
+	"Сохраняется выключенным, без активации. Включение — отдельным переключателем после настройки пути.", "Saved disabled, without activation. Enable separately with the switch after configuring the path.",
+	"Для включения укажите исходный IP или интерфейс и подтвердите путь HTTPS/UDP в расширенных настройках. ", "To enable, set a source IP or interface and confirm the HTTPS/UDP path in Advanced settings. ",
 	"Сохранено. Статус аккаунта недоступен. Готовность смотрите в статусах сети и политики.", "Saved. Account status is unavailable. See network and policy status for readiness.",
 	"Зарегистрировать новый аккаунт", "Register a new account",
 	"Отменить регистрацию", "Cancel registration",

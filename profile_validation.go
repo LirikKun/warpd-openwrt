@@ -156,6 +156,15 @@ func validateProfiles(g Settings, before *Settings) error {
 			return fmt.Errorf("invalid profile identity or name")
 		}
 		kind := profileType(id, p)
+		if p.PolicyMode != "" && p.PolicyMode != "off" && p.PolicyMode != "exclusions" && p.PolicyMode != "strict" {
+			return fmt.Errorf("invalid policy_mode")
+		}
+		if p.PolicyCountry != "" && (p.PolicyCountry != strings.ToUpper(p.PolicyCountry) || len(p.PolicyCountry) != 2 || !knownCountry(p.PolicyCountry) || p.PolicyCountry == "XK") {
+			return fmt.Errorf("policy_country must be an uppercase ISO-3166 country")
+		}
+		if p.PolicyMode == "strict" && p.PolicyCountry == "" {
+			return fmt.Errorf("strict policy requires policy_country")
+		}
 		if err := validateRelayCredential(p.Credential); err != nil {
 			return err
 		}
@@ -174,6 +183,7 @@ func validateProfiles(g Settings, before *Settings) error {
 				copy := *p
 				copy.Enabled = old.Enabled
 				copy.Name = old.Name
+				copy.PolicyMode, copy.PolicyCountry = old.PolicyMode, old.PolicyCountry
 				if !reflect.DeepEqual(old, &copy) {
 					return fmt.Errorf("legacy chain tunnel settings are read-only")
 				}

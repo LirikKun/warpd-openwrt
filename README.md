@@ -96,6 +96,10 @@ warpd-uninstall --purge
 
 `--purge` deletes exactly these saved data files: `/etc/config/warpd`, `/etc/warpd/warp-account.json` and `/etc/warpd/profiles.json`. Back up first if needed. External shared binaries, SSClash and shared system packages are not removed.
 
+## Credits
+
+Relay: [llimonix](https://github.com/nellimonix) · [warp-config-generator-vercel](https://github.com/nellimonix/warp-config-generator-vercel).
+
 ## Help and references
 
 Start with **Diagnostics and log** in the panel. Over SSH, use `logread -e warpd` or `/etc/init.d/warpd status`. Check the account, selected ports, router time and Internet access before changing other services.

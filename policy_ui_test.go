@@ -24,7 +24,7 @@ func runUIRenderAssertions(t *testing.T, assertions string) {
  const location={href:'http://router/',hostname:'router'};const history={replaceState(){}};
  const assert=require('node:assert/strict');
  ` + indexHTML[start:end] + `
- connected=true;receivedAt=Date.now();lastStatus={config:{check_period:30,exclude_nodes:'DME',exclude_countries:'RU'},proxies:{}};
+ connected=true;receivedAt=Date.now();lastStatus={config:{check_period:30,exclude_nodes:'DME',exclude_countries:'RU'},profiles:[],relays:[],proxies:{}};
  ` + assertions
 	if out, err := exec.Command(node, "-e", script).CombinedOutput(); err != nil {
 		t.Fatalf("offline UI render failed: %v\n%s", err, out)

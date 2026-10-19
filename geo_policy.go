@@ -13,12 +13,30 @@ type geoCacheKey struct {
 	port                             int
 	excludedNodes, excludedCountries string
 	revision                         uint64
+	policyMode, policyCountry        string
 }
 
 func geoKeyFor(g Settings, generation uint64, ep, outer string, p *ProxySettings) geoCacheKey {
 	n, c := effectiveExclusions(g, p)
 	listen, port := profileProbeAddress(g, p.Key, p)
-	return geoCacheKey{generation, ep, outer, listen, port, n, c, g.Revision}
+	return geoCacheKey{generation, ep, outer, listen, port, n, c, g.Revision, p.PolicyMode, p.PolicyCountry}
+}
+
+func profileNeedsGeo(id string, p *ProxySettings) bool {
+	return p != nil && (p.PolicyMode == "strict" || p.PolicyMode == "" && (profileType(id, p) == "legacy-m2w" || profileType(id, p) == "relay-warp"))
+}
+
+func publicCountryPolicyError(g Settings, country string) string {
+	country = strings.ToUpper(strings.TrimSpace(country))
+	if !knownCountry(country) {
+		return "public IP country unknown"
+	}
+	for _, excluded := range strings.Split(g.ExcludeCountries, ",") {
+		if strings.ToUpper(strings.TrimSpace(excluded)) == country {
+			return "excluded public IP country " + country
+		}
+	}
+	return ""
 }
 func geoEligible(g Settings, res exitParse) bool {
 	return observedNodePolicyError(g, res.node, res.nodeCountry) == "" && knownCountry(res.country) && strings.ToUpper(strings.TrimSpace(res.country)) != "RU"
@@ -40,7 +58,11 @@ func (c *ProxyCheck) clearGeo() {
 	})
 }
 func (c *ProxyCheck) observeGeo(ctx context.Context, g Settings, res exitParse, key geoCacheKey) {
-	if !geoEligible(g, res) {
+	eligible := geoEligible(g, res)
+	if key.policyMode == "strict" {
+		eligible = observedNodePolicyError(g, res.node, res.nodeCountry) == "" && publicCountryPolicyError(g, res.country) == "" && res.country == key.policyCountry
+	}
+	if !eligible {
 		c.clearGeo()
 		return
 	}
@@ -63,6 +85,11 @@ func (c *ProxyCheck) observeGeo(ctx context.Context, g Settings, res exitParse, 
 	})
 }
 func geoVerified(g Settings, st ProxyState, key geoCacheKey, now time.Time) bool {
+	if key.policyMode == "strict" {
+		g.ExcludeNodes, g.ExcludeCountries = key.excludedNodes, key.excludedCountries
+		return geoFresh(st, key, now) && st.GeoError == "" && knownCountry(key.policyCountry) && st.GeoCountry == key.policyCountry &&
+			st.ExitCountry == key.policyCountry && publicCountryPolicyError(g, st.GeoCountry) == "" && publicCountryPolicyError(g, st.ExitCountry) == "" && observedNodePolicyError(g, st.ExitNode, st.ExitNodeCountry) == ""
+	}
 	return geoFresh(st, key, now) && st.GeoError == "" && knownCountry(st.GeoCountry) && st.GeoCountry != "RU" &&
 		geoEligible(g, exitParse{node: st.ExitNode, nodeCountry: st.ExitNodeCountry, country: st.ExitCountry})
 }

@@ -8,18 +8,18 @@
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #f6f6f3;
-        --paper: #fff;
-        --ink: #222824;
-        --muted: #626960;
-        --line: #d8ddd5;
-        --soft: #edefe9;
-        --accent: #28563b;
-        --ok: #24603b;
-        --warn: #85500e;
+        --bg: #edeeeb;
+        --paper: #fafbf8;
+        --ink: #202a2d;
+        --muted: #536269;
+        --line: #a3afaf;
+        --soft: #e4e9e7;
+        --accent: #075c68;
+        --ok: #21623e;
+        --warn: #795000;
         --bad: #a02f27;
-        --focus: #215ca5;
-        --mono: Consolas, 'Courier New', monospace;
+        --focus: #075c68;
+        --mono: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
       }
       * {
         box-sizing: border-box;
@@ -28,15 +28,12 @@
         margin: 0;
         background: var(--bg);
         color: var(--ink);
-        font:
-          14px/1.5 Arial,
-          'Segoe UI',
-          sans-serif;
+        font: 14px/1.5 var(--mono);
       }
       main {
-        max-width: 1080px;
-        margin: 0 auto;
-        padding: 38px 32px 24px;
+        max-width: 1040px;
+        margin: 24px auto;
+        padding: 0 24px 20px;
       }
       h1,
       h2,
@@ -45,11 +42,11 @@
         margin: 0;
       }
       h1 {
-        font-size: 24px;
-        letter-spacing: -0.7px;
+        font-size: 22px;
+        letter-spacing: -0.5px;
       }
       h2 {
-        font-size: 17px;
+        font-size: 15px;
         font-weight: 600;
       }
       h3 {
@@ -68,7 +65,7 @@
       button {
         min-height: 44px;
         border: 1px solid var(--line);
-        border-radius: 5px;
+        border-radius: 0;
         background: var(--paper);
         padding: 9px 14px;
       }
@@ -97,7 +94,7 @@
         width: 100%;
         min-height: 44px;
         border: 1px solid var(--line);
-        border-radius: 4px;
+        border-radius: 0;
         background: var(--paper);
         padding: 9px 10px;
       }
@@ -141,7 +138,7 @@
         justify-content: space-between;
         gap: 20px;
         align-items: center;
-        margin-bottom: 26px;
+        margin-bottom: 16px;
       }
       .eyebrow {
         font-size: 13px;
@@ -156,7 +153,7 @@
         border: 1px solid var(--line);
         padding: 12px 14px;
         background: var(--paper);
-        border-radius: 4px;
+        border-radius: 0;
         margin-bottom: 16px;
         overflow-wrap: anywhere;
       }
@@ -188,8 +185,9 @@
       }
       .services {
         background: var(--paper);
-        border-top: 1px solid var(--line);
+        border: 1px solid var(--line);
       }
+      .services > .service:last-child { border-bottom: 0; }
       .column-head,
       .service-main {
         display: grid;
@@ -207,7 +205,7 @@
       }
       .service {
         position: relative;
-        padding: 14px 18px;
+        padding: 10px 14px;
         border-bottom: 1px solid var(--line);
         min-width: 0;
       }
@@ -242,40 +240,18 @@
         font-size: 13px;
       }
       .track {
-        position: relative;
         display: inline-block;
-        width: 42px;
-        height: 24px;
-        border: 1px solid var(--muted);
-        background: var(--soft);
-        border-radius: 16px;
+        width: 3ch;
+        white-space: nowrap;
+        font-size: 16px;
+        color: var(--muted);
         flex-shrink: 0;
       }
-      .track:after {
-        content: '';
-        position: absolute;
-        top: 3px;
-        left: 3px;
-        width: 16px;
-        height: 16px;
-        border-radius: 50%;
-        background: var(--muted);
-      }
-      .toggle[aria-checked='true'] .track {
-        background: var(--accent);
-        border-color: var(--accent);
-      }
-      .toggle[aria-checked='true'] .track:after {
-        left: 21px;
-        background: #fff;
-      }
-      .toggle[aria-busy='true'] .track {
-        background: var(--soft);
-        border-color: var(--muted);
-      }
-      .toggle[aria-busy='true'] .track:after {
-        background: var(--muted);
-      }
+      .track:after { content: '[ ]'; font-size: 16px; }
+      .toggle[aria-checked='true'] .track { color: var(--ok); }
+      .toggle[aria-checked='true'] .track:after { content: '[x]'; }
+      .toggle[aria-busy='true'] .track { color: var(--warn); }
+      .toggle[aria-busy='true'] .track:after { content: '[-]'; }
       summary {
         min-height: 44px;
         display: list-item;
@@ -410,7 +386,7 @@
         padding: 12px;
         background: var(--soft);
         border: 1px solid var(--line);
-        border-radius: 4px;
+        border-radius: 0;
         max-height: 260px;
         overflow: auto;
         margin: 12px 0 0;
@@ -459,17 +435,17 @@
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #191c1a;
-          --paper: #202421;
-          --ink: #e1e5df;
-          --muted: #a4afa2;
-          --line: #414a40;
-          --soft: #282f29;
-          --accent: #426e50;
-          --ok: #9fc7a2;
-          --warn: #e1b878;
-          --bad: #f2a49c;
-          --focus: #a4c9ff;
+          --bg: #101719;
+          --paper: #151e21;
+          --ink: #e1e9e7;
+          --muted: #9eafaf;
+          --line: #4a6268;
+          --soft: #213034;
+          --accent: #176572;
+          --ok: #95d7ac;
+          --warn: #efc27c;
+          --bad: #ffa99e;
+          --focus: #8cdee8;
         }
       }
       @media (max-width: 720px) {
@@ -564,7 +540,7 @@
         min-height: 44px;
         padding: 9px 10px;
         border: 1px solid var(--line);
-        border-radius: 4px;
+        border-radius: 0;
         background: var(--paper);
       }
       .profile-editor {
@@ -636,6 +612,52 @@
           flex: 1;
         }
       }
+      a { color: var(--focus); text-underline-offset: 3px; }
+      #credits { margin-top: 8px; overflow-wrap: anywhere; }
+      #workspace-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0;
+        border: 1px solid var(--line);
+        background: var(--paper);
+        margin-bottom: 20px;
+      }
+      #workspace-nav a {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 8px 20px;
+        color: var(--muted);
+        text-decoration: none;
+        border-right: 1px solid var(--line);
+      }
+      #workspace-nav a:hover { background: var(--soft); color: var(--ink); }
+      #workspace-nav a[aria-current='page'] { background: var(--accent); color: #fff; }
+      h1::before { content: '> '; color: var(--focus); }
+      .workspace-panel { min-height: 240px; }
+      .workspace-panel > .section-heading:first-child { margin-top: 0; }
+      .scan-panel { border-top: 0; margin-top: 0; padding-top: 0; }
+      .secondary > summary { min-height: 44px; font-size: 14px; }
+      #create-profile, #create-relay { border-top: 0; margin-bottom: 12px; }
+      #create-profile > summary, #create-relay > summary {
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        background: var(--paper);
+      }
+      .profile-editor { margin-top: 12px; padding: 14px 0; }
+      .toggle:hover:not(:disabled) { outline: 1px solid var(--line); outline-offset: -1px; }
+      @media (max-width: 720px) {
+        main { margin: 12px auto; padding: 0 12px 16px; }
+        #workspace-nav a { flex: 1 1 50%; padding: 8px; }
+        #workspace-nav a:nth-child(2n) { border-right: 0; }
+        #workspace-nav a:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+        .connection { min-width: 0; max-width: 60%; overflow-wrap: anywhere; }
+        .topline { gap: 12px; margin-bottom: 12px; }
+        .service-main { grid-template-columns: minmax(0, 1fr) 104px; }
+        .control, .toggle { min-width: 0; }
+        .service { padding: 10px; }
+      }
     </style>
   </head>
   <body>
@@ -650,6 +672,12 @@
           <p class="muted" id="updated">Ожидание статуса</p>
         </div>
       </header>
+      <nav id="workspace-nav" aria-label="Разделы">
+        <a href="#proxies" aria-current="page">Прокси</a>
+        <a href="#relay">Relay</a>
+        <a href="#search">Поиск</a>
+        <a href="#settings">Настройки</a>
+      </nav>
       <section id="auth" class="notice" hidden aria-labelledby="auth-title">
         <h2 id="auth-title">Доступ к управлению</h2>
         <p class="micro">
@@ -675,7 +703,7 @@
         aria-live="polite"
         hidden
       ></div>
-      <section aria-labelledby="services-title">
+      <section id="proxies-view" class="workspace-panel" aria-labelledby="services-title">
         <div class="section-heading">
           <div>
             <h2 id="services-title">Прокси</h2>
@@ -694,6 +722,8 @@
         <!-- prettier-ignore -->
         <p class="policy-note">SOCKS TCP закрыт до подтверждения допустимого выхода. UDP и BIND не поддерживаются.</p>
       </section>
+      <section id="relay-view" class="workspace-panel" aria-labelledby="relays-title"></section>
+      <section id="search-view" class="workspace-panel" aria-labelledby="scan-title">
       <section id="scan-panel" class="scan-panel" aria-labelledby="scan-title">
         <div class="scan-heading">
           <span id="scan-spinner" class="spin" hidden aria-hidden="true"></span>
@@ -709,6 +739,8 @@
           <pre id="scan-log" class="log" aria-label="Журнал поиска">—</pre>
         </details>
       </section>
+      </section>
+      <section id="settings-view" class="workspace-panel" aria-labelledby="settings-heading">
       <details class="secondary" id="diagnostics">
         <summary>Диагностика и журнал</summary>
         <div class="secondary-body">
@@ -740,8 +772,8 @@
           </details>
         </div>
       </details>
-      <details class="secondary" id="settings">
-        <summary>Настройки</summary>
+      <details class="secondary" id="settings" open>
+        <summary id="settings-heading">Настройки</summary>
         <div class="secondary-body">
           <form id="config-form">
             <div id="settings-fields" class="settings-fields"></div>
@@ -756,7 +788,9 @@
           </form>
         </div>
       </details>
+      </section>
       <footer id="footer">warpd · данные ещё не получены</footer>
+      <p id="credits" class="micro muted">Relay · <a href="https://github.com/nellimonix" rel="noreferrer">llimonix</a> · <a href="https://github.com/nellimonix/warp-config-generator-vercel" rel="noreferrer">warp-config-generator-vercel</a></p>
     </main>
     <script>
       'use strict';
@@ -936,13 +970,18 @@
       function relayData(id) {
         return lastStatus && lastStatus.relays.find((r) => r.id === id);
       }
+      function openRelayAdvanced(id) {
+        const form = $(id + '-relay-form');
+        form.closest('details').open = true;
+        $(id + '-advanced').open = true;
+        $(id + '-source_ip').focus();
+      }
       function makeRelayForm(id, resource = {}, create = false) {
         const form = element('form', {
             id: id + '-' + (create ? 'form' : 'relay-form'),
             class: 'profile-editor',
           }),
           fields = element('div', { class: 'settings-fields' });
-        field(fields, id, 'name', 'Имя');
         const url = field(
           fields,
           id,
@@ -955,11 +994,14 @@
         url.autocomplete = 'new-password';
         url.spellcheck = false;
         if (create) url.required = true;
-        if (create) field(fields, id, 'enabled', 'Включён', 'checkbox');
-        field(fields, id, 'source_ip', 'Исходный IP (необязательно)');
-        field(fields, id, 'interface', 'Интерфейс (необязательно)');
+        const advanced = element('details', { id: id + '-advanced', class: 'maintenance' }),
+          advancedFields = element('div', { class: 'settings-fields' });
+        advanced.append(element('summary', {}, 'Расширенные настройки'));
+        field(advancedFields, id, 'name', 'Имя');
+        field(advancedFields, id, 'source_ip', 'Исходный IP (необязательно)');
+        field(advancedFields, id, 'interface', 'Интерфейс (необязательно)');
         const interval = field(
-          fields,
+          advancedFields,
           id,
           'monitor_interval',
           'Интервал мониторинга, секунд',
@@ -968,20 +1010,23 @@
         interval.min = '30';
         interval.max = '86400';
         field(
-          fields,
+          advancedFields,
           id,
           'path_confirmed',
           'Подтверждаю: HTTPS-активация и UDP Relay используют согласованный публичный IP роутера',
           'checkbox',
         );
-        form.append(
-          fields,
+        advanced.append(
+          advancedFields,
           element(
             'p',
             { class: 'micro muted' },
             'Мониторинг работает без прокси. Ссылка отправляется только роутеру; она не открывается в браузере. Выключение не отзывает привязку у провайдера.',
           ),
         );
+        form.append(fields, advanced);
+        if (create) form.append(element('p', { class: 'micro muted' },
+          'Сохраняется выключенным, без активации. Включение — отдельным переключателем после настройки пути.'));
         form.append(
           element(
             'button',
@@ -992,7 +1037,7 @@
         form.addEventListener('submit', async (event) => {
           event.preventDefault();
           if (!canWrite() || !form.reportValidity()) return;
-          const body = {},
+          const body = create ? { enabled: false } : {},
             sent = [];
           for (const input of form.querySelectorAll('[data-key]')) {
             const key = input.dataset.key;
@@ -1076,7 +1121,7 @@
             'Нет ресурсов Relay.',
           ),
         );
-        $('scan-panel').before(section);
+        $('relay-view').append(section);
       }
       function renderRelays() {
         const resources = lastStatus.relays;
@@ -1101,14 +1146,17 @@
               class: 'toggle',
               'data-write': '',
             });
-            toggle.addEventListener('click', () =>
+            toggle.addEventListener('click', () => {
+              const current = relayData(id);
+              if (!current.enabled && (!current.path_confirmed || (!current.source_ip && !current.interface)))
+                openRelayAdvanced(id);
               entityMutation(
                 'relays/' + id,
                 'PATCH',
-                { enabled: !relayData(id).enabled },
+                { enabled: !current.enabled },
                 id,
-              ),
-            );
+              );
+            });
             toggle.append(
               element('span', {
                 id: id + '-toggle-label',
@@ -1127,6 +1175,14 @@
             details.append(element('summary', {}, 'Настройки и активация'));
             const content = element('div', { class: 'detail-content' });
             content.append(makeRelayForm(id, r));
+            const pathHelp = element('p', { id: id + '-path-help', class: 'micro warn' }),
+              configurePath = element('button', { id: id + '-configure-path', type: 'button' }, 'Настроить путь');
+            pathHelp.append(
+              element('span', {}, 'Для включения укажите исходный IP или интерфейс и подтвердите путь HTTPS/UDP в расширенных настройках. '),
+              configurePath,
+            );
+            configurePath.addEventListener('click', () => openRelayAdvanced(id));
+            content.append(pathHelp);
             const facts = element('dl');
             for (const [key, label] of [
               ['links', 'Связанные профили'],
@@ -1136,7 +1192,7 @@
               ['monitor-error', 'Ошибка мониторинга'],
             ])
               addFact(facts, id + '-' + key, label);
-            content.append(facts);
+            content.append(facts, element('p', { class: 'micro muted' }, 'Мониторинг не подтверждает готовность туннеля'));
             const actions = element('div', { class: 'actions' }),
               activate = element(
                 'button',
@@ -1185,10 +1241,12 @@
                 ? 'Ссылка не задана'
                 : !r.enabled
                   ? 'Выключен'
-                  : !r.path_confirmed
+                  : !r.path_confirmed || (!r.source_ip && !r.interface)
                     ? 'Путь активации не подтверждён'
-                    : 'Мониторинг не подтверждает готовность туннеля',
-            'micro ' + (r.enabled ? 'warn' : 'muted'),
+                    : (r.status || {}).error
+                      ? 'Ошибка мониторинга'
+                      : 'Мониторинг включён · туннель — в профиле прокси',
+            'micro ' + (r.enabled && (r.status || {}).error ? 'bad' : r.enabled && (!r.path_confirmed || (!r.source_ip && !r.interface)) ? 'warn' : 'muted'),
           );
           const links = lastStatus.profiles.filter(
             (p) => p.relay_id === id,
@@ -1211,6 +1269,7 @@
           );
           put(id + '-monitor-check', fmtTime(runtime.last_observation_at));
           put(id + '-monitor-error', runtime.error || '—');
+          $(id + '-path-help').hidden = !r.enabled || (r.path_confirmed && !!(r.source_ip || r.interface));
           prefill($(id + '-relay-form'), r);
         }
         $('empty-relays').hidden = resources.length > 0;
@@ -1273,6 +1332,8 @@
             input.dataset.dirty = 'true';
             if (input.closest('form').id === 'new-profile-form')
               profileVisibility('new-profile');
+            if (key === 'policy_mode')
+              profilePolicyVisibility(input.closest('form'));
             if (['source_ip', 'interface', 'url'].includes(key)) {
               const ack = input
                 .closest('form')
@@ -1290,6 +1351,7 @@
         return lastStatus && lastStatus.profiles.find((p) => p.id === id);
       }
       function formValue(input) {
+        if (input.dataset.key === 'policy_country') return input.value.trim().toUpperCase();
         return input.type === 'checkbox'
           ? input.checked
           : input.type === 'number'
@@ -1300,7 +1362,7 @@
         for (const input of form.querySelectorAll('[data-key]')) {
           const key = input.dataset.key;
           if (key === 'url') continue;
-          const value = key.startsWith('awg-')
+          const value = key === 'policy_mode' && data[key] === undefined ? '' : key.startsWith('awg-')
             ? (data.awg || {})[key.slice(4)]
             : data[key];
           if (!input.dataset.dirty && value !== undefined) {
@@ -1308,6 +1370,13 @@
             else input.value = value;
           }
         }
+      }
+      function profilePolicyVisibility(form) {
+        const mode = form.querySelector('[data-key=policy_mode]'),
+          country = form.querySelector('[data-key=policy_country]');
+        if (!mode || !country) return;
+        country.disabled = mode.value !== 'strict';
+        country.required = mode.value === 'strict';
       }
       function makeProfileForm(id, profile, create = false) {
         const form = element('form', {
@@ -1321,15 +1390,22 @@
             ['masque', 'MASQUE'],
             ['relay-warp', 'Relay-WARP'],
           ]);
-        field(fields, id, 'name', 'Имя');
-        if (create) field(fields, id, 'enabled', 'Включён', 'checkbox');
-        field(fields, id, 'listen', 'Адрес SOCKS');
-        const port = field(fields, id, 'port', 'Порт SOCKS', 'number');
-        port.min = '1';
+        const advanced = element('details', { id: id + '-advanced', class: 'maintenance' }),
+          advancedFields = element('div', { class: 'settings-fields' });
+        advanced.append(element('summary', {}, 'Расширенные настройки'));
+        field(advancedFields, id, 'name', 'Имя');
+        if (create) field(advancedFields, id, 'enabled', 'Включён', 'checkbox');
+        field(advancedFields, id, 'listen', 'Адрес SOCKS');
+        const port = field(advancedFields, id, 'port', 'Порт SOCKS', 'number');
+        port.min = '1024';
         port.max = '65535';
+        if (create) {
+          port.required = false;
+          port.placeholder = 'Автоматически';
+        }
         if (create || profile.type === 'masque') {
           const transport = field(
-            fields,
+            advancedFields,
             id,
             'transport',
             'Транспорт MASQUE',
@@ -1355,20 +1431,32 @@
             ['DE', 'NL', 'FI', 'LV', 'EE'].map((v) => [v, v]),
           );
         }
+        const policyMode = field(advancedFields, id, 'policy_mode', 'Политика выхода', 'select', [
+          ...(!create ? [['', 'Текущая политика (совместимость)']] : []),
+          ['off', 'Без геопроверки'],
+          ['exclusions', 'Исключения HTTP-colo'],
+          ['strict', 'Строго: страна публичного IP'],
+        ]);
+        if (!create) policyMode.querySelector('option[value=""]').disabled = true;
+        const policyCountry = field(advancedFields, id, 'policy_country', 'Страна публичного IP · код из двух букв');
+        policyCountry.pattern = '[A-Za-z]{2}';
+        policyCountry.maxLength = 2;
+        policyCountry.autocomplete = 'off';
+        policyCountry.spellcheck = false;
         field(
-          fields,
+          advancedFields,
           id,
           'exclude_nodes',
           'Локально исключить HTTP-colo · коды через запятую',
         );
         field(
-          fields,
+          advancedFields,
           id,
           'exclude_countries',
           'Локально исключить страны colo · коды через запятую',
         );
-        form.append(
-          fields,
+        advanced.append(
+          advancedFields,
           element(
             'p',
             { class: 'micro muted' },
@@ -1407,7 +1495,8 @@
           }
         });
         awg.append(awgFields, restore);
-        form.append(awg);
+        advanced.append(awg);
+        form.append(fields, advanced);
         const actions = element('div', { class: 'actions' }),
           save = element(
             'button',
@@ -1425,6 +1514,7 @@
             for (const input of form.querySelectorAll('[data-key]'))
               delete input.dataset.dirty;
             prefill(form, profileData(id));
+            profilePolicyVisibility(form);
           });
           actions.append(discard);
         }
@@ -1446,6 +1536,9 @@
             const key = input.dataset.key;
             if (key.startsWith('awg-') || (!create && !input.dataset.dirty))
               continue;
+            if (create && key === 'policy_mode' && !input.dataset.dirty) continue;
+            if (key === 'policy_country' && input.disabled) continue;
+            if (create && key === 'port' && input.value === '') continue;
             if (
               (key === 'transport' && type !== 'masque') ||
               ((key === 'relay_id' || key === 'relay_country') &&
@@ -1455,6 +1548,10 @@
             body[key] = formValue(input);
             sent.push(input);
           }
+          if (body.policy_mode && body.policy_mode !== 'strict')
+            body.policy_country = '';
+          else if (body.policy_mode === 'strict')
+            body.policy_country = formValue(policyCountry);
           const awgInputs = [...form.querySelectorAll('[data-key^="awg-"]')];
           if (
             (type === 'warp' || type === 'relay-warp') &&
@@ -1484,6 +1581,7 @@
           }
         });
         prefill(form, profile);
+        profilePolicyVisibility(form);
         return form;
       }
       function updateRelayOptions(id) {
@@ -1508,6 +1606,7 @@
       function profileVisibility(id) {
         const p = profileData(id),
           type = p ? p.type : $(id + '-type').value;
+        profilePolicyVisibility($(id + (id === 'new-profile' ? '-form' : '-profile-form')));
         for (const key of ['transport', 'relay_id', 'relay_country']) {
           const input =
             id === 'new-profile'
@@ -1533,6 +1632,9 @@
           lastStatus.defaults.awg
         );
         if (id === 'new-profile') {
+          const name = $('new-profile-name');
+          if (!name.dataset.dirty)
+            name.value = { warp: 'WARP', masque: 'MASQUE', 'relay-warp': 'Relay-WARP' }[type];
           const relayOption = $('new-profile-type').querySelector(
             'option[value="relay-warp"]',
           );
@@ -1543,17 +1645,16 @@
       }
       function initializeNewProfile() {
         const form = $('new-profile-form');
-        let port = 1080;
-        while (lastStatus && lastStatus.profiles.some((p) => p.port === port))
-          port++;
         prefill(form, {
           type: 'warp',
           name: 'WARP',
           enabled: true,
           listen: '0.0.0.0',
-          port,
+          port: '',
           transport: 'quic',
           relay_country: 'DE',
+          policy_mode: 'exclusions',
+          policy_country: '',
           exclude_nodes: '',
           exclude_countries: '',
           awg:
@@ -1927,6 +2028,15 @@
           );
           toggle.addEventListener('click', () => toggleProxy(name));
           control.append(toggle);
+          const rename = element('button', { id: name + '-rename', type: 'button' }, 'Переименовать');
+          rename.addEventListener('click', () => {
+            $(name + '-details').open = true;
+            $(name + '-advanced').open = true;
+            const input = $(name + '-name');
+            input.focus();
+            input.select();
+          });
+          identity.append(rename);
           main.append(identity, health, control);
           const details = element('details', { id: name + '-details' });
           details.append(element('summary', {}, 'Подключение и детали'));
@@ -2136,6 +2246,10 @@
         );
       }
       function policyAllowed(name, p) {
+        // Explicit versioned modes are evaluated by the backend. Keep only
+        // freshness/transport checks here, and fail closed on unknown modes.
+        if (p.policy_mode !== undefined && p.policy_mode !== '')
+          return ['off', 'exclusions', 'strict'].includes(p.policy_mode) && p.policy_ready === true;
         const cfg = lastStatus.config || {},
           excludedNodes = [
             ...codes(cfg.exclude_nodes),
@@ -2221,7 +2335,7 @@
             : !p.enabled
               ? 'Политика: не оценивается'
               : policy
-                ? 'Политика: подходит'
+                ? ((profileData(name) || {}).policy_mode === 'off' ? 'Политика: отключена' : 'Политика: подходит')
                 : transport
                   ? 'Политика: выход не подходит'
                   : 'Политика: готовность не подтверждена',
@@ -2236,7 +2350,13 @@
               ? ' / в движке ' + (p.applied_enabled ? 'включён' : 'выключен')
               : ' / применение оценивается по проверке сети'),
         );
-        put(name + '-ep', p.endpoint || '—');
+        // Mirror relay_udp.go's production allowlist/UDP destination, not the
+        // private local bridge. This is configured destination, not readiness.
+        const relayCountry = p.type === 'relay-warp' && (profileData(name) || p).relay_country;
+        put(name + '-ep', p.type === 'relay-warp'
+          ? (['DE', 'NL', 'FI', 'LV', 'EE'].includes(relayCountry)
+            ? relayCountry.toLowerCase() + '.tribukvy.ltd:4500' : '—')
+          : p.endpoint || '—');
         if (isLegacy(name)) put(name + '-outer', p.outer || '—');
         put(
           name + '-mode',
@@ -2280,7 +2400,7 @@
         put(
           name + '-policy-error',
           p.policy_error ||
-            ((isLegacy(name) || p.type === 'relay-warp') &&
+            ((!p.policy_mode && (isLegacy(name) || p.type === 'relay-warp')) &&
             !p.foreign_ip_verified
               ? 'Иностранный IP не подтверждён'
               : policy
@@ -2804,11 +2924,35 @@
           message('Не удалось скопировать. Выделите адрес вручную.', 'warn');
         }
       }
+      function initializeWorkspace() {
+        const routes = ['proxies', 'relay', 'search', 'settings'];
+        const nav = $('workspace-nav');
+        function show(route) {
+          if (!routes.includes(route)) route = 'proxies';
+          for (const name of routes) $(name + '-view').hidden = name !== route;
+          for (const link of nav.querySelectorAll('a')) {
+            if (link.hash === '#' + route) link.setAttribute('aria-current', 'page');
+            else link.removeAttribute('aria-current');
+          }
+        }
+        nav.addEventListener('click', (event) => {
+          const link = event.target.closest('a');
+          if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          const route = link.hash.slice(1);
+          if (location.hash !== link.hash) history.pushState(null, '', link.hash);
+          show(route);
+        });
+        window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+        window.addEventListener('popstate', () => show(location.hash.slice(1)));
+        show(location.hash.slice(1));
+      }
       // Start the production console.
       buildRows();
       buildConfig();
       buildProfileWizard();
       buildRelaySection();
+      initializeWorkspace();
       $('scan-btn').addEventListener('click', () => scan('both'));
       $('restart-btn').addEventListener('click', restart);
       $('rotate-btn').addEventListener('click', () => register(false));

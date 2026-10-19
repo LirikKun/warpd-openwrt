@@ -82,13 +82,11 @@ func (srv *Server) status() map[string]any {
 		}
 		kind := profileType(name, p)
 		active := effectiveEnabled(g, p)
-		chain := kind == "legacy-m2w" || kind == "relay-warp"
-		if chain {
-			ep, outer := liveEndpoint(name, p, e)
-			c := getCheck(name)
-			if !applied || !active || c.snapshot().geoKey != geoKeyFor(g, process.Generation, ep, outer, p) {
-				c.clearGeo()
-			}
+		requiresGeo := profileNeedsGeo(name, p)
+		ep, outer := liveEndpoint(name, p, e)
+		c := getCheck(name)
+		if !requiresGeo || !applied || !active || c.snapshot().geoKey != geoKeyFor(g, process.Generation, ep, outer, p) {
+			c.clearGeo()
 		}
 		st := getCheck(name).snapshot()
 		st.Name = p.Name
@@ -96,6 +94,7 @@ func (srv *Server) status() map[string]any {
 			st.Name = name
 		}
 		st.Enabled = p.Enabled
+		st.PolicyMode, st.PolicyCountry = p.PolicyMode, p.PolicyCountry
 		st.ID, st.Type = name, kind
 		st.EffectiveEnabled = active
 		st.Paused = p.Enabled && !active
@@ -116,8 +115,9 @@ func (srv *Server) status() map[string]any {
 		if kind == "relay-warp" {
 			st.TransportReady = st.TransportReady && mihomo.RelayReady(g, name)
 		}
-		st.ForeignIPVerified = chain && st.TransportReady &&
+		st.ForeignIPVerified = requiresGeo && st.TransportReady &&
 			geoVerified(g, st, geoKeyFor(g, process.Generation, st.Endpoint, st.Outer, p), time.Now())
+		st.PolicyCountryVerified = p.PolicyMode == "strict" && st.ForeignIPVerified
 		st.PolicyError = ""
 		if st.TransportReady {
 			policySettings := g

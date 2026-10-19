@@ -57,7 +57,7 @@ func (o *Orchestrator) syncProfileGatesLocked(g Settings) {
 		checked, err := time.Parse(time.RFC3339Nano, st.LastCheck)
 		expiry := checked.Add(time.Duration(g.CheckPeriod)*time.Second + 40*time.Second)
 		verified := false
-		if profileType(id, p) == "legacy-m2w" || profileType(id, p) == "relay-warp" {
+		if profileNeedsGeo(id, p) {
 			verified = geoVerified(profilePolicySettings(g, p), st, key, now)
 			geoAt, _ := time.Parse(time.RFC3339Nano, st.GeoCheck)
 			if geoAt.Add(60 * time.Second).Before(expiry) {

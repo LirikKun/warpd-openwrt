@@ -598,7 +598,9 @@ func (o *Orchestrator) scanWarpProfile(g Settings, key string) {
 		"-o", report,
 	}
 	nodes, countries := effectiveExclusions(g, p)
-	args = append(args, excludeArgs(nodes, countries)...)
+	if scanNeedsGeography(g, key, p) {
+		args = append(args, excludeArgs(nodes, countries)...)
+	}
 	if p.AWG.Preset != "" {
 		args = append(args, "-jc", strconv.Itoa(p.AWG.JC), "-jmin", strconv.Itoa(p.AWG.JMin), "-jmax", strconv.Itoa(p.AWG.JMax), "-i1", p.AWG.I1)
 	} else if p.GenI1 != "" {

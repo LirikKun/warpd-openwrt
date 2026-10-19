@@ -32,6 +32,10 @@ warpd запускает эти программы как отдельные п�
 | `mihomo-linux-arm64-v1.19.31.gz` | `9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4` |
 | `mihomo-linux-amd64-v1-v1.19.31.gz` | `d4304c546c3cddcb6fafd4b4fddb0ba1a95ffa36606fda56d75db2e59ad24114` |
 
+## Relay — llimonix
+
+Спасибо [llimonix](https://github.com/nellimonix) за Relay и проект [warp-config-generator-vercel](https://github.com/nellimonix/warp-config-generator-vercel). warpd использует отдельную клиентскую реализацию для работы с Relay; веб-приложение генератора в комплект не включается.
+
 ## Получение и размещение
 
 Сборщик проверяет загруженные файлы по закреплённым SHA-256 до распаковки. Контрольные суммы помогают проверить целостность, но сами по себе не являются цифровой подписью или доказательством доверенного происхождения всего установочного архива.

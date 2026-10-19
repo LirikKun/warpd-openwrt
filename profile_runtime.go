@@ -75,4 +75,24 @@ func profilePolicySettings(g Settings, p *ProxySettings) Settings {
 	g.ExcludeNodes, g.ExcludeCountries = effectiveExclusions(g, p)
 	return g
 }
+
+// A migrated chain can be the sole consumer of a disabled/absent WARP profile.
+// Off-only consumers must not inherit geography filters from that dependency;
+// shared discovery still retains filters when another enabled consumer needs them.
+func scanNeedsGeography(g Settings, id string, p *ProxySettings) bool {
+	consumer := effectiveEnabled(g, p)
+	if consumer && p.PolicyMode != "off" {
+		return true
+	}
+	for key, chain := range g.Proxies {
+		if !effectiveEnabled(g, chain) || profileType(key, chain) != "legacy-m2w" || id != "warp" || chain.Inner != "" {
+			continue
+		}
+		consumer = true
+		if chain.PolicyMode != "off" {
+			return true
+		}
+	}
+	return !consumer && p.PolicyMode != "off"
+}
 func normalizedProfileTransport(p *ProxySettings) string { return strings.ToLower(p.Transport) }

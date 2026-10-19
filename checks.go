@@ -166,7 +166,9 @@ func checkProxyWith(ctx context.Context, g Settings, name string, orch *Orchestr
 		currentEP != ep || currentOuter != outer {
 		return // a result from an obsolete applied configuration is not current health
 	}
-	if profileType(name, p) == "legacy-m2w" || profileType(name, p) == "relay-warp" {
+	if !profileNeedsGeo(name, p) {
+		c.clearGeo()
+	} else {
 		if err != nil {
 			c.clearGeo()
 		} else {
@@ -242,7 +244,7 @@ func recordProxyResult(g Settings, name string, orch *Orchestrator, res exitPars
 	}
 	// /meta is an observed HTTP serving colo, not tunnel-peer identity.
 	// Only WARP has an existing scanner that can honor these exclusions.
-	if reason := exitPolicyError(g, name, res.node, res.nodeCountry, res.country); profileType(name, g.Proxies[name]) == "warp" && reason != "" {
+	if reason := exitPolicyError(g, name, res.node, res.nodeCountry, res.country); profileType(name, g.Proxies[name]) == "warp" && g.Proxies[name].PolicyMode == "" && reason != "" {
 		if orch.requestScan(name, reason) {
 			c.set(func(st *ProxyState) { st.Rescans++ })
 			logg.Printf("[%s] %s -> scan queued", name, reason)
@@ -280,12 +282,28 @@ var _ = log.Printf
 // exitPolicyError assesses the observation only. Callers separately require fresh
 // transport health bound to the applied configuration and owned listeners.
 func exitPolicyError(g Settings, name, node, nodeCountry, publicCountry string, verified ...bool) string {
-	kind := profileType(name, g.Proxies[name])
+	p := g.Proxies[name]
+	kind := profileType(name, p)
 	if kind == "" {
 		return "unknown exit policy"
 	}
 	g = profilePolicySettings(g, g.Proxies[name])
+	if p != nil && p.PolicyMode == "off" {
+		return ""
+	}
 	reason := observedNodePolicyError(g, node, nodeCountry)
+	if p != nil && p.PolicyMode != "" {
+		if reason != "" {
+			return reason
+		}
+		if reason = publicCountryPolicyError(g, publicCountry); reason != "" {
+			return reason
+		}
+		if p.PolicyMode == "strict" && (p.PolicyCountry == "" || len(verified) == 0 || !verified[0]) {
+			return "selected public IP country " + p.PolicyCountry + " not independently verified"
+		}
+		return ""
+	}
 	if kind == "legacy-m2w" || kind == "relay-warp" {
 		if reason != "" {
 			reason += "; "

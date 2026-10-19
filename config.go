@@ -78,6 +78,8 @@ type ProxySettings struct {
 	Key                                          string
 	Name, Type, Transport, RelayID, RelayCountry string
 	ExcludeNodes, ExcludeCountries               string
+	PolicyMode                                   string `json:"policy_mode,omitempty"`
+	PolicyCountry                                string `json:"policy_country,omitempty"`
 	AWG                                          AWGOptions
 	Credential                                   RelayCredential `json:"credential,omitempty"`
 	Enabled                                      bool

@@ -47,6 +47,10 @@ type ProxyState struct {
 	Error             string   `json:"error"`
 	Log               []string `json:"-"`
 	_                 struct{} `json:"-"`
+
+	PolicyMode            string `json:"policy_mode"`
+	PolicyCountry         string `json:"policy_country"`
+	PolicyCountryVerified bool   `json:"policy_country_verified"`
 }
 
 type exitParse struct {
