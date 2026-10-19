@@ -4,26 +4,26 @@
 
 A WARP proxy manager for OpenWrt with endpoint discovery, dynamic SOCKS profiles, availability checks and an English/Russian web UI. One shared Mihomo process serves tunnel profiles; WarpScout handles discovery and account registration. No TUN, routes, firewall rules or transparent redirection are added. SSClash is not required and its files are not replaced.
 
-> **Version scope:** this README describes the **3.0.0 source candidate**, not a deployed or release-ready build. Offline review has passed; live acceptance remains outstanding. The download instructions below install the **previous published v2.2.0 release**, **not** the dynamic-profile model or TCP gates described here. No v3 release download is advertised.
+> **Version:** these instructions target **v3.0.0** and its dynamic-profile model. See the [bilingual release notes](docs/releases/v3.0.0.md) and [verification scope](#release-verification) for what was tested and what remains unverified.
 
-> **Safety boundary:** enabled intent, engine availability, policy readiness and a public listener are separate states. Candidate public ports accept TCP SOCKS5 CONNECT only after fresh checks of the exact managed child, applied configuration/generation and observed exit policy. Relay-WARP additionally requires fresh independent foreign-egress verification. These checks do **not** establish provider binding or tunnel-peer location. The integrated Relay runtime has offline verification, not live provider/tunnel acceptance; there is no direct-WARP fallback.
+> **Safety boundary:** enabled intent, engine availability, policy readiness and a public listener are separate states. Public ports accept TCP SOCKS5 CONNECT only after fresh checks of the exact managed child, applied configuration/generation and observed exit policy. Relay-WARP additionally requires fresh independent foreign-egress verification. These checks do **not** establish provider binding or tunnel-peer location. One bounded Relay-WARP live acceptance passed on ARM64 OpenWrt; it is not a guarantee for every provider or device. There is no direct-WARP fallback.
 
-## Features and candidate status
+## Features
 
 - Multiple WARP / AmneziaWG and MASQUE profiles, each with a stable ID, name, port, endpoint pin, health state and additive exclusions. MASQUE supports `quic` and `http2` (H2).
 - Create, edit and delete profiles through the panel/API; type is immutable. Profiles and Relay resources are stored privately, not in four fixed UCI slots.
-- Fresh candidate initialization creates **only one WARP profile**, enabled on port 4001. Other profiles must be added. An existing empty profile store stays empty, including monitor-only setups.
+- Fresh initialization creates **only one WARP profile**, enabled on port 4001. Other profiles must be added. An existing empty profile store stays empty, including monitor-only setups.
 - Existing fixed-slot configurations migrate, including disabled entries. An existing MASQUE → WARP chain is retained as **`legacy-m2w`**, migration-only: rename, enable/disable or delete it; tunnel settings are read-only. **New chains cannot be created.**
-- Automatic discovery, endpoint pins and rate-limited rescans. Candidate engine SOCKS listeners stay on private loopback ports while checked.
+- Automatic discovery, endpoint pins and rate-limited rescans. Engine SOCKS listeners stay on private loopback ports while checked.
 - App-owned public TCP gates close their listeners **and accepted streams** on revocation or authorization expiry. UDP ASSOCIATE and BIND are unsupported.
-- Independent Relay IP monitoring and activation requests, without a WARP account or running engine in monitor-only mode. **Provider/tunnel compatibility remains unverified.**
+- Independent Relay IP monitoring and activation requests, without a WARP account or running engine in monitor-only mode; optional linked Relay-WARP profiles with their own tunnel credentials.
 - Embedded web UI without CDNs, external fonts or Node.js on the router. Without effective tunnel profiles, the engine can stop while management remains available.
 
 Implementation references: [core integration](docs/core-integration.md), [API working contract](docs/profile-api-contract.md), [store](profile_store.go), [validation](profile_validation.go), [API](profile_api.go), [TCP gates](profile_gate.go). The working contract is not a shipped-feature guarantee.
 
 ## Requirements
 
-- OpenWrt with procd and UCI, on Linux `arm64` or `amd64`. Source-candidate behavior still needs authorized router-side acceptance; local tests do not demonstrate a working tunnel.
+- OpenWrt with procd and UCI, on Linux `arm64` or `amd64`. Live router acceptance covered ARM64 Filogic 820, not an AMD64 router; see [verification scope](#release-verification).
 - Root SSH access, free ports and enough overlay and `/tmp` space to unpack the bundle. On OpenWrt, `/tmp` uses RAM. Mihomo is the largest component; the installer checks available space.
 - A system CA trust store (`ca-bundle` or equivalent) and correct date/time for HTTPS. The bootstrap can install missing supported packages after consent, using existing repositories; it never edits feeds.
 - Connectivity to Cloudflare for registration/tunnels and to HTTPS health-check services.
@@ -32,11 +32,11 @@ Implementation references: [core integration](docs/core-integration.md), [API wo
 
 The bundle includes warpd and pinned versions of WarpScout 0.16.0 and Mihomo 1.19.31. Third-party binaries go into a warpd-specific directory, not over SSClash binaries. Sources and licenses: [THIRD_PARTY.md](THIRD_PARTY.md).
 
-## Installation — previous published v2.2.0 only
+## Installation — v3.0.0
 
-**This section installs v2.2.0, not the 3.0.0 source candidate.** v2.2.0 uses the earlier fixed-slot model and advisory exit-policy behavior; do not assume its public SOCKS ports have the candidate's TCP gate protection. Do not use these commands to downgrade a candidate installation.
+For an existing installation, make a private off-router backup first; see [Upgrading](#upgrading). The v3 private store is not an automatic downgrade path to v2.2.0.
 
-### 1. Download and install the previous release
+### 1. Download and install
 
 Connect over SSH as root, replacing the example address:
 
@@ -50,7 +50,7 @@ Run this block. No GitHub account or token is needed. It saves the script to a p
 (
   umask 077
   script=$(mktemp /tmp/warpd-setup.XXXXXX) || exit 1
-  wget -O "$script" https://github.com/LirikKun/warpd-openwrt/releases/download/v2.2.0/install-warpd.sh &&
+  wget -O "$script" https://github.com/LirikKun/warpd-openwrt/releases/download/v3.0.0/install-warpd.sh &&
     sh "$script"
   result=$?
   rm -f "$script"
@@ -60,7 +60,7 @@ Run this block. No GitHub account or token is needed. It saves the script to a p
 
 The installer checks OpenWrt, root access, architecture (`arm64`/`amd64`), disk space, required commands and HTTPS CA certificates. It offers to install supported missing dependencies through your configured `apk` or `opkg` repositories. It does not upgrade the entire system, edit feeds, network, firewall or SSClash settings, or disable TLS verification. Missing foundational firmware components or a package manager unable to retrieve dependencies cause a clear failure instead of a partial application install.
 
-During interactive setup, choose **English / Русский** for the web UI. Upgrades can keep the current language. The script then downloads the v2.2.0 bundle, verifies SHA-256 before extraction and runs the transactional installer, which rolls back application-file replacement or service-start failures. Temporary staging is cleaned automatically. Checksums detect corruption; they do not replace trust in the publisher and HTTPS.
+During interactive setup, choose **English / Русский** for the web UI. Upgrades can keep the current language. The script then downloads the v3.0.0 bundle, verifies SHA-256 before extraction and runs the transactional installer, which rolls back application-file replacement or service-start failures. Temporary staging is cleaned automatically. Checksums detect corruption; they do not replace trust in the publisher and HTTPS. The release also provides `install-warpd.sh.sha256` for checking a saved bootstrap before running it.
 
 For automation, save the script as above and replace the `sh "$script"` line with the appropriate invocation:
 
@@ -85,21 +85,19 @@ sh "$script" --language en \
 
 warpd creates private links to these executables, without overwriting or removing them. Their owner's future updates also affect warpd. Older Clash builds may lack MASQUE, AmneziaWG or `dialer-proxy` support.
 
-**Manual / offline installation.** The [v2.2.0 release](https://github.com/LirikKun/warpd-openwrt/releases/tag/v2.2.0) provides `linux-arm64` and `linux-amd64` archives and their `.sha256` files. Download the matching pair, run `sha256sum -c <archive-name>.sha256` **before extraction**, unpack into a private temporary directory and run `sh install.sh --language en` there. This inner installer does not download system packages: prepare requirements beforehand. Use `scp -O` when transferring from a computer to Dropbear without SFTP. Remove only your exact staging directory after success.
+**Manual / offline installation.** The [v3.0.0 release](https://github.com/LirikKun/warpd-openwrt/releases/tag/v3.0.0) provides `warpd-3.0.0-linux-arm64.tar.gz` and `warpd-3.0.0-linux-amd64.tar.gz`, each with a matching `.tar.gz.sha256` sidecar. Download the matching pair, run `sha256sum -c <archive-name>.sha256` **before extraction**, unpack into a private temporary directory and run `sh install.sh --language en` there. This inner installer (`packaging/install.sh` in source) is different from the online bootstrap (`install.sh` in source, published as `install-warpd.sh`). It does not download system packages: prepare requirements beforehand. Use `scp -O` when transferring from a computer to Dropbear without SFTP. Remove only your exact staging directory after success.
 
 This is a portable bundle, not an APK/IPK package: warpd itself is not registered with `apk`/`opkg` and uses the uninstaller below. Fresh installs enable autostart; upgrades preserve settings, account and service state.
 
-### 2. First start of the previous release
+### 2. First start
 
-Open `http://<router-LAN-IP>:9095/`. In v2.2.0, only WARP is enabled by default; the other fixed services start disabled.
+Open `http://<router-LAN-IP>:9095/`. A fresh installation creates only WARP on port 4001 with enabled intent. Use **Add proxy** to add WARP or MASQUE profiles; Relay-WARP additionally needs a Relay resource and profile-owned credentials as described below.
 
 A fresh installation has no account. Open **Diagnostics and log** → **Account maintenance · destructive actions** → **New account**, or in the Russian UI **«Диагностика и журнал» (Diagnostics and log)** → **«Обслуживание аккаунта · опасные действия» (Account maintenance · destructive actions)** → **«Новый аккаунт» (New account)**. Confirm and wait for successful registration in the log. Then click **«Найти для всех» (Find for all)** if discovery has not started automatically. Registration and discovery need external connectivity; an installed service is not yet a working tunnel.
 
-Do not create a new account during a normal upgrade: this replaces shared credentials and may interrupt every service's connections.
+Wait for fresh network/policy readiness and a public listener before configuring clients. Do not create a new account during a normal upgrade: this replaces shared credentials and may interrupt profiles using that account. Relay-WARP credentials are separate.
 
-## Using the 3.0.0 source candidate
-
-These are source-candidate semantics, **not instructions to deploy before review**. No published v3 installer is linked here. Build/test locally as described below.
+## Using v3.0.0
 
 ### Profiles, migration and ports
 
@@ -111,11 +109,11 @@ Readiness after edits is refreshed by a configured health-check round, not an im
 
 ### Access and private data
 
-The default management bind and desired public profile bind are `0.0.0.0`; the API token is initially empty. This is for a trusted LAN with an appropriate existing firewall, **not Internet exposure**. No WAN ports are opened. Restrict management through UCI (`web_listen`) and profile binds through the profile API. Set `warpd.global.web_secret` for API authentication; it does **not** authenticate SOCKS clients. Restart after external changes to management bind/port/token. Cross-site request checks do not replace authentication or network access controls.
+The default management bind and desired public profile bind are `0.0.0.0`; the API token is initially empty, and public SOCKS has no client authentication. This is for a trusted LAN with an appropriate existing firewall, **not Internet exposure**. No WAN ports are opened. Restrict management through UCI (`web_listen`) and profile binds through the profile API. Set `warpd.global.web_secret` for API authentication; it does **not** authenticate SOCKS clients. Restart after external changes to management bind/port/token. Cross-site request checks do not replace authentication or network access controls.
 
 Never put tokens in URLs or publish the account, `/etc/warpd/profiles.json` or generated `/tmp/warpd-mihomo.yaml`. Relay activation URLs are credentials: write-only through the API, retained in the private store, absent from public DTOs and safe status/errors. Backups must remain private too.
 
-### Relay resources, credentials and candidate runtime
+### Relay resources, credentials and runtime
 
 Relay resources and child `relay-warp` profiles have separate enabled intent. Disabling a parent pauses its children without changing their saved enabled flags; child enable/disable requests are blocked while the parent is disabled. A child can still be deleted. Delete **all** linked profiles, including disabled ones, before deleting the parent. The same activation credential cannot belong to multiple resources. Leaving an existing URL field empty retains it; it cannot bypass dependencies.
 
@@ -123,11 +121,20 @@ Monitoring runs independently with an empty profile collection, without loading 
 
 Relay-WARP uses **profile-owned tunnel credentials**, separate from the activation resource and shared WARP account. Choose explicit, confirmed generation of a new account for that profile, or write-only manual entry of an existing private key, the **server's `[Peer] PublicKey`** (not the client's public key), assigned tunnel IPv4 and optional assigned IPv6, with compatible Reserved/DNS/MTU parameters as needed. Addresses are validated, not invented or borrowed from the shared account. Credential values are never returned by the public API. Saving or generating credentials stores them and revokes old authorization; it does **not** apply a tunnel or activate Relay. Save, enable, restart and monitoring never implicitly register an account.
 
-Relay destination hostnames are resolved **inside the tunnel**, using the profile's explicit DNS address or, when absent, `1.1.1.1` and `1.0.0.1`. This avoids sending system-resolver Fake-IP answers into the tunnel; use SOCKS hostname resolution rather than supplying an already-resolved Fake-IP address. This policy does not change the router's DNS, SSClash, routes or firewall, and does not start a DNS listener. DNS reachability through a live provider remains part of authorized tunnel acceptance. An IPv6-only DNS server requires an assigned tunnel IPv6 address; the renderer never invents one.
+Relay destination hostnames are resolved **inside the tunnel**, using the profile's explicit DNS address or, when absent, `1.1.1.1` and `1.0.0.1`. This avoids sending system-resolver Fake-IP answers into the tunnel; use SOCKS hostname resolution rather than supplying an already-resolved Fake-IP address. This policy does not change the router's DNS, SSClash, routes or firewall, and does not start a DNS listener. DNS reachability still depends on the selected provider/path. An IPv6-only DNS server requires an assigned tunnel IPv6 address; without it this configuration is unsupported, and the renderer never invents one.
 
-The source candidate integrates a per-profile, loopback-only UDP bridge into the **same managed Mihomo child**, not a second engine or direct-WARP substitute. The bridge binds provider traffic and DNS to the confirmed source address/interface/family and authorizes only the exact child's UDP socket for the applied configuration/generation. Linux pidfd support, `/proc` socket ownership checks and permission to duplicate that child's socket descriptor are required; missing support or permission fails closed, without a weaker fallback. A public TCP gate still requires current bridge authorization, fresh tunnel health and exit policy, including independent foreign-egress verification. Credential storage, engine apply and public readiness are separate outcomes; read runtime readiness from `/api/status`, not account-action metadata.
+The runtime integrates a per-profile, loopback-only UDP bridge into the **same managed Mihomo child**, not a second engine or direct-WARP substitute. The bridge binds provider traffic and DNS to the acknowledged source address/interface/family and authorizes only the exact child's UDP socket for the applied configuration/generation. Linux pidfd support, `/proc` socket ownership checks and permission to duplicate that child's socket descriptor are required; missing support or permission fails closed, without a weaker fallback. A public TCP gate still requires current bridge authorization, fresh tunnel health and exit policy, including independent foreign-egress verification. Credential storage, engine apply and public readiness are separate outcomes; read runtime readiness from `/api/status`, not account-action metadata.
 
-**Provider/tunnel compatibility and live acceptance remain outstanding.** Offline fixtures and a target-kernel diagnostic do not establish a completed provider tunnel, binding or foreign exit; the candidate application has not been deployed for acceptance. A provider HTTP 200 is an unverified activation outcome, not confirmed binding or tunnel readiness. User acknowledgement and an HTTP IP observation alone do not prove that activation and tunnel traffic share the intended source path. Provider keys, assigned addresses, Reserved/AWG compatibility and actual path equivalence still require authorized live evidence. See [Relay runtime integration and evidence scope](docs/relay-runtime-integration.md).
+**Practical setup order:**
+
+1. Open **Relay → Add Relay**. Enter the private activation URL and intended source IP and/or interface. Verify the intended router egress before acknowledging that HTTPS activation and UDP use the same public-IP path. The checkbox is a manual acknowledgement, **not automatic proof**. Save the resource disabled; never publish or open its credential URL from another machine.
+2. Open **Add proxy**, select **Relay-WARP**, link the resource, choose the Relay server country (not a promised exit country), name and public port, and save the child disabled.
+3. In that profile's details, open **Tunnel account · this profile only**. Choose **Enter manually** with assigned credentials, or explicitly confirm **Register a new account** and wait for it to finish. Neither operation activates Relay or proves a working tunnel; do not repeatedly submit an ambiguous generation request.
+4. Enable the parent resource, then the child. Parent monitoring can make provider requests. Wait for a **fresh** successful health/policy result and `public_listening` in `/api/status`; a saved or applied response is not enough.
+5. Point the client at `socks5h://<router-LAN-IP>:<profile-port>`; use the actual profile port, not necessarily 4001. Verify proxied HTTPS with TLS verification enabled.
+6. To stop both, **disable the child while the parent is still enabled, then disable the parent** and read back both saved flags. In v3.0.0, child toggles are blocked when the parent is off; parent-off alone pauses the child but retains its saved enabled choice.
+
+A provider HTTP 200 remains an unverified activation outcome, not confirmed binding or tunnel readiness. User acknowledgement and HTTP IP observation alone do not prove activation/UDP source-path equivalence. The bounded tested result is in [release verification](#release-verification); implementation details and evidence limits are in [Relay runtime integration](docs/relay-runtime-integration.md).
 
 ### Filters and AWG compatibility
 
@@ -137,9 +144,9 @@ Persisted preset: `warpscout-0.16.0-mihomo-1.19.31-awg-v1`. Only **JC, Jmin, Jma
 
 ## Upgrading
 
-Candidate installer behavior is documented from source, not release acceptance. It preserves UCI/global settings, account and profile store; first-run migration handles old sections. Pins, ports, saved enabled intent, UI language (unless explicitly overridden) and service/autostart state are retained. Empty stores are not repopulated. No router routes/firewall/network/SSClash changes or shared-binary replacement are performed.
+The installer preserves UCI/global settings, account and profile store; first-run migration handles old sections. Pins, ports, saved enabled intent, UI language (unless explicitly overridden) and service/autostart state are retained. Empty stores are not repopulated. No router routes/firewall/network/SSClash changes or shared-binary replacement are performed. Routine upgrades do not register provider accounts.
 
-Only use a reviewed matching bundle for an upgrade; the v2.2.0 download above is **not** a candidate upgrade path. Repeat `--mihomo`/`--warpscout` when deliberately keeping external dependencies; without these flags, the bundle installs its private copies.
+Use the v3.0.0 installer above to upgrade. Repeat `--mihomo`/`--warpscout` when deliberately keeping external dependencies; without these flags, the bundle installs its private copies. Back up before migration: downgrading the daemon alone does not restore a v2-compatible configuration.
 
 Upgrading a running service briefly interrupts its proxy connections. Do not assume a previously disabled service will be enabled by an upgrade. Manual service controls:
 
@@ -155,7 +162,7 @@ Before upgrading, save private copies of `/etc/config/warpd`, `/etc/warpd/warp-a
 
 ## Uninstalling
 
-The **candidate** uninstaller removes owned application files/private dependencies or links, keeping UCI, account, profile store and Relay credentials:
+The uninstaller removes owned application files/private dependencies or links, keeping UCI, account, profile store and Relay credentials:
 
 ```sh
 warpd-uninstall
@@ -167,13 +174,13 @@ Also delete the known private data files:
 warpd-uninstall --purge
 ```
 
-The candidate purge list is exactly **`/etc/config/warpd`, `/etc/warpd/warp-account.json`, `/etc/warpd/profiles.json`**. This deletes account keys and Relay credentials: back up first if needed. Unknown files are preserved; `/etc/warpd` is removed only if empty. External `/usr/bin/warpscout`, `/opt/clash/bin/clash`, SSClash, shared packages and network settings are outside scope. See [uninstaller source](packaging/uninstall.sh). The older v2.2.0 uninstaller predates the profile store; do not assume it has the candidate's purge behavior.
+The v3.0.0 purge list is exactly **`/etc/config/warpd`, `/etc/warpd/warp-account.json`, `/etc/warpd/profiles.json`**. This deletes account keys and Relay credentials: back up first if needed. Unknown files are preserved; `/etc/warpd` is removed only if empty. External `/usr/bin/warpscout`, `/opt/clash/bin/clash`, SSClash, shared packages and network settings are outside scope. See [uninstaller source](packaging/uninstall.sh). The older v2.2.0 uninstaller predates the profile store; do not assume it has v3's purge behavior.
 
 The installed uninstaller disappears after removal. Use `sh uninstall.sh` from an extracted bundle for an idempotent check or repeat removal.
 
 ## Ports and client setup
 
-The candidate has only WARP on port 4001 after fresh initialization; management uses 9095. Additional profile ports are assigned or selected when created, not fixed by transport. Migrated profiles retain their existing ports. A public TCP port opens only after fresh readiness/policy verification. UDP ASSOCIATE and BIND are unsupported.
+Only WARP on port 4001 exists after fresh initialization; management uses 9095. Additional profile ports are assigned or selected when created, not fixed by transport. Migrated profiles retain their existing ports. A public TCP port opens only after fresh readiness/policy verification. UDP ASSOCIATE and BIND are unsupported.
 
 Configure SOCKS5 at `router-LAN-IP:4001` in your application or existing routing system. warpd does not route all router or client traffic through itself. For example, from a computer:
 
@@ -231,18 +238,28 @@ Legacy fixed-slot mutations (`/api/proxy`, `/api/endpoint`, `/api/endpoint/clear
 - Gates require **fresh transport health and observed HTTP-colo policy** for the exact managed child and current applied configuration/generation, endpoint and settings. A serving colo is **not proven tunnel-peer identity or a foreign public-IP guarantee**. Local tests do not prove live routing geography.
 - Candidates are checked on loopback before public exposure. Unsuitable, stale or unverified candidates have no public TCP gate. Revocation/expiry closes existing forwarded streams and the listener. This is not a router-wide firewall and does not protect unrelated listeners or local access to candidate loopback ports.
 - Public SOCKS supports **TCP CONNECT only**, not BIND or UDP ASSOCIATE. MASQUE QUIC as an internal transport does not imply UDP support for SOCKS clients.
-- Relay-WARP and retained `legacy-m2w` additionally require independent fresh foreign-public-IP verification. No new chain feature, live foreign exit, successful Relay binding or provider tunnel is claimed.
+- Relay-WARP and retained `legacy-m2w` additionally require independent fresh foreign-public-IP verification. One Relay-WARP foreign exit was verified in the bounded ARM64 acceptance below; this is not universal provider support or new-chain acceptance. Provider binding is not independently certified.
 - All tunnel profiles share one engine. Restart/reconfiguration can interrupt other profiles; readiness must be checked again. Monitor-only Relay remains independent.
 - Port conflicts, missing CA/account, incorrect time, unavailable networks and store/migration errors are distinct causes, not reasons to modify SSClash, the firewall or network automatically.
 
 Start with **Diagnostics and log** and the discovery log in the panel, then check `logread -e warpd`, `/etc/init.d/warpd status` and `/api/status`. Never publish keys or raw active configurations.
 
+## Release verification
+
+The reviewed runtime passed **800 full Go tests and 800 race tests**, `go vet` and an ARM64 build. These are reused runtime-verification results, not tests rerun for this documentation edit.
+
+On **2026-10-19**, bounded live acceptance on **ARM64 OpenWrt, Filogic 820**, with **Mihomo 1.19.31 / WarpScout 0.16.0**, passed fresh generation-matched Relay-WARP health and public-gate policy. A LAN client reached `https://example.com` through the public SOCKS port with **HTTP 200 and verified TLS**; independent `ifconfig.co` geolocation reported **DE**. Final DNS acceptance observed **one activation attempt and zero new account-generation actions**. Explicit profile-account generation had passed earlier after the pinned generator's optional `outer` metadata compatibility fix; it was not repeated for final DNS acceptance.
+
+The router's system Fake-IP setup remained in place. SSClash configuration, router routes/firewall and account material were unchanged; Relay and the tested child were restored off, the public port closed, and WARP passed readiness and real proxied HTTPS checks.
+
+This is one bounded provider/path/device result, **not** all-provider compatibility, live IPv6 acceptance, an AMD64-router test, sustained stability or completion of every recovery scenario. Initial private probes failed before later fresh health and the successful public-gate checks; early startup results must not be promoted to readiness. See [runtime evidence scope](docs/relay-runtime-integration.md#evidence-scope).
+
 ## Building and testing
 
-Local development only until review/acceptance; these commands do not deploy or publish. Use the candidate checkout: cloning a published branch alone does not establish candidate provenance. A Linux computer needs Python 3 and Go 1.24+, plus HTTPS access to GitHub for the initial dependency download. No root, Docker, OpenWrt SDK or host `apk` installation is required:
+These commands build/test locally; they do not deploy or publish. Use the v3.0.0 tag checkout when reproducing this release. A Linux computer needs Python 3 and Go 1.24+, plus HTTPS access to GitHub for the initial dependency download. No root, Docker, OpenWrt SDK or host `apk` installation is required:
 
 ```sh
-# From the candidate checkout:
+# From the release checkout:
 ./build.sh --arch arm64
 # For x86-64:
 ./build.sh --arch amd64
@@ -264,7 +281,7 @@ UI DOM tests: [ui_interaction.README.md](ui_interaction.README.md). Node.js/jsdo
 To check actual installed files without starting services, use a separate offline root:
 
 ```sh
-cd /path/to/extracted/candidate-bundle
+cd /path/to/extracted/warpd-bundle
 mkdir -p /absolute/path/to/empty-directory
 sh install.sh --root /absolute/path/to/empty-directory
 sh uninstall.sh --root /absolute/path/to/empty-directory --purge

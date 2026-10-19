@@ -1,10 +1,11 @@
-# Relay runtime integration — source candidate only
+# Relay runtime integration — v3.0.0
 
-This guide describes the integrated **3.0.0 source candidate**, not a deployed
-application, published release or live provider/tunnel acceptance. The README's
-installation commands still select the previous published **v2.2.0** release;
-they do not install this runtime. Supported release architectures remain Linux
-`arm64` and `amd64`.
+This guide describes the **v3.0.0** credential/runtime path. Use the current
+[English README](../README.md) or [Russian README](../README.ru.md) for installation
+and the [bilingual release notes](releases/v3.0.0.md) for upgrade highlights.
+Release bundles target Linux `arm64` and `amd64`; the bounded live result below
+covers only ARM64 OpenWrt on Filogic 820. An installed service, successful
+activation request and working public tunnel are separate outcomes.
 
 ## Credential ownership and explicit actions
 
@@ -42,7 +43,7 @@ Sources: [credential API](../relay_account.go),
 
 The same managed Mihomo child serves ordinary and Relay profiles. Each Relay
 profile uses an application-owned loopback UDP bridge to a selected allowlisted
-country endpoint. Bound DNS and the outbound UDP socket use the confirmed
+country endpoint. Bound DNS and the outbound UDP socket use the acknowledged
 source address/interface/address family; the engine's local endpoint is not a
 direct-WARP fallback. Monitor-only Relay needs neither tunnel credentials nor
 an engine, and monitoring/activation status is not tunnel proof.
@@ -73,24 +74,100 @@ Sources: [engine integration](../relay_engine_runtime.go),
 and [provider module contract](relay-provider-contract.md) retain earlier-stage
 scope; this guide covers the later integrated credential/runtime path.
 
-## Evidence scope and remaining acceptance
+## Destination DNS
 
-The reviewed runtime baseline has two independent offline review passes
-(lifecycle and API/policy), full Go and race runs with 764 passing tests each,
-`go vet` and an arm64 build. A separate target-kernel diagnostic passed the
-required kernel/socket mechanisms. The final runtime/UI candidate also passed
-an independent UI review and combined Go/race runs with 764 passing tests each,
-no failures or skips, plus `go vet` and a reproducible arm64 build. Its responsive
-UI matrix covered 12 language/viewport/theme combinations. These are offline QA
-results, not a deployed application or provider/tunnel demonstration. Integration
-preserved the approved code bytes; only documentation changed afterward.
+Relay destination hostnames resolve inside the tunnel (`remote-dns-resolve`),
+using explicit profile credential DNS or, when absent, the same defaults as
+standalone WARP: `1.1.1.1`, `1.0.0.1`. Stored credentials are not rewritten to add
+defaults. A SOCKS hostname target is required: a literal Fake-IP supplied by a
+client cannot be repaired by remote DNS. This destination policy is separate
+from the source-bound outer Relay endpoint lookup and introduces no router DNS
+listener, system DNS, routing, firewall or SSClash changes.
 
-Before release/deployment acceptance, authorized live work still needs to
-establish provider credential/address/Reserved/AWG compatibility, the intended
-source path for observation, activation and UDP transport, actual tunnel health
-and independent foreign egress through the exact current child/configuration.
-It must also exercise runtime revocation/recovery and service persistence on
-the installed candidate. A provider HTTP 200 remains **unverified activation**,
-not binding confirmation. Neither local fixtures, user acknowledgement nor
-HTTP IP observation alone proves binding or source-path equivalence. No live
-provider request, registration, deployment or release is authorized by this guide.
+The peer has `0.0.0.0/0`; it additionally receives `::/0` only when validated
+credentials contain an assigned tunnel IPv6 address. IPv6-only DNS without
+assigned tunnel IPv6 is **unsupported**, not silently repaired by direct/system
+fallback or an invented address. Offline engine/netstack checks are not live
+IPv6-provider acceptance.
+
+Source: [Mihomo profile renderer](../mihomo.go).
+
+## Setup and safe shutdown
+
+1. In **Relay → Add Relay**, save the private activation URL, intended source IP
+   and/or interface, and the same-public-IP-path acknowledgement. Verify the
+   intended egress yourself before acknowledging it; the checkbox is manual,
+   **not automatic source-path or provider-binding proof**. Keep the resource
+   disabled during preparation. Editing URL/source/interface requires renewed
+   acknowledgement. Do not open the credential URL from another host.
+2. In **Add proxy**, create a disabled Relay-WARP child linked to that resource,
+   with the intended server country and its own public port. Server country is
+   not a promised egress country.
+3. Open the child's **Tunnel account · this profile only** disclosure. Explicitly
+   import assigned credentials or confirm **Register a new account**, then wait
+   for completion. This does not activate Relay, apply the engine or replace the
+   shared WARP account. Do not replay an ambiguous generation request.
+4. Enable the parent, then the child. Parent monitoring can send provider
+   requests. Wait for fresh, generation-matched transport/policy readiness and
+   `public_listening` in `/api/status`, not just `persisted` or `applied`.
+5. Configure `socks5h://<router-LAN-IP>:<profile-port>` and verify proxied HTTPS
+   with TLS certificate verification enabled. No implicit registration occurs
+   on save, enable, restart or monitoring.
+6. Disable the child **while its parent is still enabled**, then disable the
+   parent; read back both desired flags and the closed public port. Current child
+   toggles, including `enabled:false`, are blocked while the parent is off.
+   Parent disablement pauses children without changing their saved choices;
+   re-enabling it can resume children whose saved enabled flags remain true.
+
+The activation credential is write-only private data; keep it and profile-store
+backups out of logs, issues, screenshots and public reports. Delete every linked
+child, including disabled children, before deleting a resource.
+
+## Evidence scope
+
+### Current verification
+
+The reviewed runtime passed **800 full Go tests and 800 race tests**, `go vet`
+and an ARM64 build. These are reused runtime results, not a new full-suite run
+for this documentation update. See [README release verification](../README.md#release-verification).
+
+On **2026-10-19**, bounded live acceptance on **ARM64 OpenWrt, Filogic 820**, with
+**Mihomo 1.19.31 / WarpScout 0.16.0**, established:
+
+- Fresh Relay-WARP health for the applied engine generation, policy readiness
+  and a working public SOCKS gate.
+- A LAN-client public-SOCKS request to `https://example.com` with **HTTP 200**,
+  verified example body and **verified TLS certificate**; independent
+  `ifconfig.co` geolocation reported **DE**.
+- **One observed activation attempt and zero new account-generation actions**
+  during final DNS acceptance. Explicit profile-account generation had passed
+  earlier after support for the pinned generator's optional `outer` metadata;
+  it was not repeated during final DNS acceptance.
+- The system Fake-IP setup remained active; protected account material,
+  SSClash configuration, router routes and firewall remained unchanged.
+  Relay and its tested child were restored off, the public port closed,
+  and ordinary WARP passed readiness and real SOCKS HTTPS checks.
+
+Initial private startup probes failed before the later fresh checks and public
+gate passed. Their failure is not hidden, and a successful early private probe
+would not by itself authorize the public port either.
+
+This proves one bounded provider/path/device result, **not** universal provider
+support, live IPv6, an AMD64-router deployment, sustained stability or every
+revocation/recovery and service-persistence scenario. Required kernel support
+must still be available on each device. Keys, assigned addresses and compatible
+Reserved/AWG parameters must come from the actual account/provider.
+
+A provider HTTP 200 remains **unverified activation**, not independently
+confirmed binding. Neither user acknowledgement nor an HTTP IP observation
+alone proves equivalence of activation and UDP source paths. This guide does
+not authorize additional provider requests or account registrations.
+
+### Historical offline integration results
+
+Earlier integration review recorded two independent lifecycle/API-policy
+passes, 764 passing full Go tests and 764 race tests, `go vet`, an ARM64 build,
+and a separate target-kernel mechanism diagnostic. The earlier runtime/UI
+integration also passed independent UI review and a 12-combination
+language/viewport/theme matrix. These historical results establish their own
+offline scope, not live tunnel acceptance; the current result is above.
